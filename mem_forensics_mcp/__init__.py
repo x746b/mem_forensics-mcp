@@ -14,6 +14,7 @@ Example:
     from mem_forensics_mcp.engine import MemoxideClient
     from mem_forensics_mcp.core import get_session, VOL3_AVAILABLE
 """
+from . import config as _config  # noqa: F401 — must load before core (sets VOLATILITY3_PATH)
 from .core import (
     MemorySession,
     get_session,

@@ -6,10 +6,12 @@ Falls back gracefully when Volatility3 is not installed.
 
 Configuration:
     Set VOLATILITY3_PATH environment variable to use an existing Volatility3
-    installation instead of requiring it in the MCP's virtualenv.
+    installation. Accepts either:
+      - Repo/source root:  /opt/volatility3  (contains volatility3/ package dir)
+      - Site-packages dir: /opt/volatility3/.venv/lib/python3.10/site-packages
 
     Example:
-        export VOLATILITY3_PATH="/opt/volatility3/.venv/lib/python3.10/site-packages"
+        export VOLATILITY3_PATH="/opt/volatility3"
 """
 from __future__ import annotations
 
@@ -26,9 +28,14 @@ _vol3_external_path = os.environ.get("VOLATILITY3_PATH")
 if _vol3_external_path:
     _vol3_path = Path(_vol3_external_path)
     if _vol3_path.exists():
-        # Add to sys.path before importing
-        sys.path.insert(0, str(_vol3_path))
-        logger.info(f"Using external Volatility3 from: {_vol3_path}")
+        # If path contains volatility3/ subpackage, it's a repo/source root
+        # Otherwise treat it as a site-packages directory
+        if (_vol3_path / "volatility3").is_dir():
+            sys.path.insert(0, str(_vol3_path))
+            logger.info(f"Using Volatility3 source tree: {_vol3_path}")
+        else:
+            sys.path.insert(0, str(_vol3_path))
+            logger.info(f"Using Volatility3 from: {_vol3_path}")
     else:
         logger.warning(f"VOLATILITY3_PATH set but path not found: {_vol3_path}")
 

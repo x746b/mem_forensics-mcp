@@ -3,6 +3,7 @@ Configuration settings for mem-forensics-mcp.
 
 Adjustable limits and paths for memory forensics analysis.
 """
+import os
 from pathlib import Path
 
 # Response size limits (to prevent LLM context overflow)
@@ -27,6 +28,11 @@ _BUILT_BINARY = _ENGINES_DIR / "memoxide-src" / "target" / "release" / "memoxide
 _PREBUILT_BINARY = _ENGINES_DIR / "memoxide" / "memoxide"
 MEMOXIDE_BINARY = _BUILT_BINARY if _BUILT_BINARY.exists() else _PREBUILT_BINARY
 MEMOXIDE_SYMBOLS = _ENGINES_DIR / "memoxide" / "symbols"
+
+# Volatility3 path — set via VOLATILITY3_PATH env or default to /opt/volatility3
+_DEFAULT_VOL3_PATH = Path("/opt/volatility3")
+if not os.environ.get("VOLATILITY3_PATH") and _DEFAULT_VOL3_PATH.exists():
+    os.environ["VOLATILITY3_PATH"] = str(_DEFAULT_VOL3_PATH)
 
 # Process reputation - known legitimate Windows processes
 # Used for anomaly detection

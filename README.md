@@ -59,11 +59,20 @@ cargo build --release
 # The server auto-detects it (prefers local build over prebuilt)
 ```
 
+### Configure Volatility3 (optional)
+
+If Vol3 is installed at `/opt/volatility3` it's auto-detected. Otherwise set the env var:
+
+```bash
+# Point to repo root or site-packages directory
+export VOLATILITY3_PATH="/path/to/volatility3"
+```
+
 ### Verify
 
 ```bash
 uv run python -m mem_forensics_mcp.server
-# Should start without errors (Ctrl+C to exit)
+# Should show: Rust engine: available, Volatility3: available
 ```
 
 ---
@@ -76,7 +85,7 @@ claude mcp add mem-forensics-mcp \
   -- uv run --directory /opt/mem_forensics-mcp python -m mem_forensics_mcp.server
 ```
 
-With external Volatility3:
+With custom Volatility3 path:
 
 ```bash
 claude mcp add mem-forensics-mcp \
