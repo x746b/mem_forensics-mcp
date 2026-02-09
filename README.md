@@ -266,3 +266,7 @@ MIT License
 __xtk__
 
 Built for the DFIR community. No Windows required >)
+
+---
+<!-- mcp-name: io.github.x746b/mem-forensics-mcp -->
+
