@@ -182,12 +182,12 @@ Running `memory_full_triage` on a Windows 10 memory dump (Win10 19041, x64, VMwa
 
 | Category | Detail |
 |----------|--------|
-| Suspicious process | `mmc.exe` (PID 3120) launched from explorer.exe, loading `family_image.msc` from Edge downloads |
+| Suspicious process | `mmc.exe` launched from explorer.exe, loading a `.msc` file from browser downloads |
 | Injected code | 4 RWX private memory regions in mmc.exe, 2 in EXCEL.EXE |
-| Child process | `dllhost.exe` (PID 7736) spawned by mmc.exe with executable RWX region |
+| Child process | `dllhost.exe` spawned by mmc.exe with executable RWX region |
 | Network | svchost.exe connections to external IPs on ports 443/80 |
 | Correlations | `active_implant` + `active_c2_session` flagged as critical |
-| IOCs | `40.113.110.67:443`, `104.81.141.145:80` |
+| IOCs | Suspicious external IPs extracted automatically |
 
 **Drill-down with filtered filescan:**
 ```
