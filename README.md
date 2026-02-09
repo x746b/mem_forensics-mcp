@@ -48,7 +48,7 @@ uv sync --extra volatility3
 
 ### Build Rust Engine (optional)
 
-A prebuilt `aarch64-linux` binary ships in `engines/memoxide/`. To build for your platform:
+Prebuilt binaries ship for `aarch64-linux` and `x86_64-linux` in `engines/memoxide/`. The server auto-detects the host architecture. To build from source:
 
 ```bash
 # Requires Rust toolchain (https://rustup.rs)
