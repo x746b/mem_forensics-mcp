@@ -161,6 +161,50 @@ memory_run_plugin(image_path="/evidence/memory.raw", plugin="malfind", pid=1234)
 
 ---
 
+## Example: Full Triage Output
+
+Running `memory_full_triage` on a Windows 10 memory dump (Win10 19041, x64, VMware):
+
+```json
+{
+  "threat_level": "critical",
+  "risk_score": 100,
+  "summary": "Processes: 115 found. Process Anomalies: 4 info-level. Network: 4 flagged of 79 connections. Commands: 52 suspicious fragments. Injected Code: 12 RWX regions. Correlations: 2 critical.",
+  "engine": "rust+python"
+}
+```
+
+**Tier routing in action:**
+- Rust (Tier 1) collected process list, psscan, cmdlines, netscan, malfind, cmdscan in ~2s
+- Python (Tier 2) correlated findings: parent-child validation, C2 detection, injection analysis, risk scoring
+
+**Key findings from the triage:**
+
+| Category | Detail |
+|----------|--------|
+| Suspicious process | `mmc.exe` (PID 3120) launched from explorer.exe, loading `family_image.msc` from Edge downloads |
+| Injected code | 4 RWX private memory regions in mmc.exe, 2 in EXCEL.EXE |
+| Child process | `dllhost.exe` (PID 7736) spawned by mmc.exe with executable RWX region |
+| Network | svchost.exe connections to external IPs on ports 443/80 |
+| Correlations | `active_implant` + `active_c2_session` flagged as critical |
+| IOCs | `40.113.110.67:443`, `104.81.141.145:80` |
+
+**Drill-down with filtered filescan:**
+```
+memory_run_plugin(image_path="memory.raw", plugin="filescan", filter="notepad")
+# Returns: 2 of 7612 results matched (server-side grep before truncation)
+```
+
+**Targeted file extraction with CLI fallback:**
+```
+memory_run_plugin(image_path="memory.raw", plugin="dumpfiles",
+                  params={"virtaddr": [0xa7850eb98de0], "dump_dir": "/tmp/out"})
+# Returns: 1 result — Notepad.lnk extracted to /tmp/out/
+# (auto-routes to vol3 CLI for ListRequirement params)
+```
+
+---
+
 ## Related Projects
 
 | Project | Focus |
