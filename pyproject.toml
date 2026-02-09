@@ -1,0 +1,73 @@
+[project]
+name = "mem-forensics-mcp"
+version = "0.1.0"
+description = "Unified Memory Forensics MCP Server - Multi-tier engine (Rust + Python + Vol3)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "xtk" }
+]
+keywords = ["mcp", "forensics", "volatility", "memory", "dfir", "incident-response"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+volatility3 = [
+    "volatility3>=2.5.0",
+    "pefile>=2023.2.7",
+    "pycryptodome>=3.20.0",
+]
+yara = [
+    "yara-python>=4.3.0",
+]
+virustotal = [
+    "vt-py>=0.18.0",
+]
+full = [
+    "volatility3>=2.5.0",
+    "pefile>=2023.2.7",
+    "pycryptodome>=3.20.0",
+    "yara-python>=4.3.0",
+    "vt-py>=0.18.0",
+]
+
+[project.urls]
+Repository = "https://github.com/x746b/mem_forensics-mcp"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mem_forensics_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
