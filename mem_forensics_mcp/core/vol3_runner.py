@@ -280,6 +280,7 @@ class Vol3Runner:
     def _construct_plugin(
         self,
         plugin_class: type,
+        file_handler=None,
         **kwargs
     ) -> Optional[interfaces.plugins.PluginInterface]:
         """
@@ -287,7 +288,8 @@ class Vol3Runner:
 
         Args:
             plugin_class: The plugin class to instantiate
-            **kwargs: Additional configuration options
+            file_handler: Optional file handler for plugins that dump files
+            **kwargs: Plugin-specific config options (e.g., pid, physaddr)
 
         Returns:
             Plugin instance or None if construction failed
@@ -301,6 +303,12 @@ class Vol3Runner:
                 self._base_config_path,
                 plugin_class.__name__,
             )
+
+            # Apply plugin-specific parameters to the context config
+            for key, value in kwargs.items():
+                if value is not None:
+                    config_key = f"{plugin_config_path}.{key}"
+                    self._context.config[config_key] = value
 
             # Run automagics for this plugin
             automagic.run(
@@ -318,7 +326,7 @@ class Vol3Runner:
                 plugin_class,
                 plugin_config_path,
                 self._progress_callback,
-                None,
+                file_handler,
             )
 
             return plugin
@@ -330,6 +338,7 @@ class Vol3Runner:
     def run_plugin(
         self,
         plugin_name: str,
+        output_dir: Optional[str] = None,
         **kwargs
     ) -> Generator[dict[str, Any], None, None]:
         """
@@ -337,6 +346,7 @@ class Vol3Runner:
 
         Args:
             plugin_name: Full plugin name (e.g., "windows.pslist.PsList")
+            output_dir: Directory for file output (for plugins like dumpfiles)
             **kwargs: Plugin-specific configuration
 
         Yields:
@@ -350,8 +360,13 @@ class Vol3Runner:
         if plugin_class is None:
             raise ValueError(f"Plugin not found: {plugin_name}")
 
+        # Create file handler CLASS if output_dir specified
+        file_handler = None
+        if output_dir:
+            file_handler = _make_file_handler_class(output_dir)
+
         # Construct and run
-        plugin = self._construct_plugin(plugin_class, **kwargs)
+        plugin = self._construct_plugin(plugin_class, file_handler=file_handler, **kwargs)
         if plugin is None:
             raise RuntimeError(f"Failed to construct plugin: {plugin_name}")
 
@@ -503,3 +518,64 @@ class Vol3Runner:
                 pass
 
         return sorted(available)
+
+
+def _make_file_handler_class(output_dir: str):
+    """
+    Create a FileHandlerInterface subclass for vol3 file output.
+
+    Vol3's construct_plugin() expects a CLASS (not instance) that subclasses
+    FileHandlerInterface. The plugin instantiates it with a filename when
+    writing files.
+    """
+    from volatility3.framework.interfaces.plugins import FileHandlerInterface
+    import tempfile
+    import os
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    class DirectFileHandler(FileHandlerInterface):
+        def __init__(self, filename: str):
+            fd, self._name = tempfile.mkstemp(
+                suffix=".vol3", prefix="tmp_", dir=str(out_dir)
+            )
+            self._file = open(fd, mode="w+b")
+            FileHandlerInterface.__init__(self, filename)
+            for item in dir(self._file):
+                if not item.startswith("_") and item not in (
+                    "closed", "close", "mode", "name",
+                ):
+                    setattr(self, item, getattr(self._file, item))
+
+        def __getattr__(self, item):
+            return getattr(self._file, item)
+
+        @property
+        def closed(self):
+            return self._file.closed
+
+        @property
+        def mode(self):
+            return self._file.mode
+
+        @property
+        def name(self):
+            return self._file.name
+
+        def close(self):
+            if self._file.closed:
+                return
+            # Compute final path
+            output_filename = os.path.join(str(out_dir), self.preferred_filename)
+            # Deduplicate if exists
+            counter = 1
+            base, ext = os.path.splitext(output_filename)
+            while os.path.exists(output_filename):
+                output_filename = f"{base}_{counter}{ext}"
+                counter += 1
+            self.preferred_filename = os.path.basename(output_filename)
+            self._file.close()
+            os.rename(self._name, output_filename)
+
+    return DirectFileHandler

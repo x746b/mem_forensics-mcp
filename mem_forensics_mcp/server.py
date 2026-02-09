@@ -89,20 +89,38 @@ def truncate_response(data: dict[str, Any], max_size: int = MAX_RESPONSE_SIZE) -
     if len(json_str) <= max_size:
         return data
 
-    data["_truncation"] = {
-        "original_size": len(json_str),
-        "truncated": True,
-        "message": "Response truncated to prevent context overflow. Use filters to narrow results.",
-    }
+    # Progressively truncate lists until under limit
+    for keep_count in [500, 200, 100, 50, 20]:
+        for key in list(data.keys()):
+            value = data[key]
+            if isinstance(value, list) and len(value) > keep_count:
+                original_len = len(value)
+                data[key] = value[:keep_count]
+                data.setdefault("_truncation", {})[f"{key}_truncated"] = f"Showing {keep_count} of {original_len}. Use 'filter' param to narrow results."
 
-    for key, value in data.items():
-        if isinstance(value, list) and len(value) > 10:
+        check = json.dumps(data, indent=2, default=str)
+        if len(check) <= max_size:
+            return data
+
+    data.setdefault("_truncation", {})["truncated"] = True
+    data["_truncation"]["message"] = "Response truncated. Use 'filter' param to narrow results."
+    return data
+
+
+def _apply_filter(data: dict[str, Any], filter_str: str) -> dict[str, Any]:
+    """Apply case-insensitive substring filter to list values in response."""
+    filter_lower = filter_str.lower()
+    for key, value in list(data.items()):
+        if isinstance(value, list):
             original_len = len(value)
-            data[key] = value[:10]
-            if "_truncation" not in data:
-                data["_truncation"] = {}
-            data["_truncation"][f"{key}_truncated"] = f"Showing 10 of {original_len}"
-
+            filtered = []
+            for item in value:
+                item_str = json.dumps(item, default=str).lower() if isinstance(item, dict) else str(item).lower()
+                if filter_lower in item_str:
+                    filtered.append(item)
+            data[key] = filtered
+            if len(filtered) < original_len:
+                data.setdefault("_filter_info", {})[key] = f"Matched {len(filtered)} of {original_len} (filter: '{filter_str}')"
     return data
 
 
@@ -301,7 +319,7 @@ async def list_tools() -> list[Tool]:
     # Raw Plugin Access (Tier 1 + Tier 3)
     tools.append(Tool(
         name="memory_run_plugin",
-        description="Run a forensics plugin. Supported Rust plugins (fast): pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, readraw, rsds. Any other name runs via Vol3.",
+        description="Run a forensics plugin. Supported Rust plugins (fast): pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, readraw, rsds. Any other name runs via Vol3. Use 'filter' to grep results server-side (avoids truncation).",
         inputSchema={
             "type": "object",
             "properties": {
@@ -309,6 +327,7 @@ async def list_tools() -> list[Tool]:
                 "plugin": {"type": "string", "description": "Plugin name (e.g., 'pslist', 'malfind', 'filescan')"},
                 "pid": {"type": "integer", "description": "Filter by PID"},
                 "params": {"type": "object", "description": "Additional plugin parameters"},
+                "filter": {"type": "string", "description": "Case-insensitive substring filter applied to results before returning. Useful for large result sets like filescan."},
             },
             "required": ["image_path", "plugin"],
         },
@@ -482,6 +501,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             plugin = arguments["plugin"]
             pid = arguments.get("pid")
             params = arguments.get("params")
+            result_filter = arguments.get("filter")
 
             session = get_session(image_path)
             if session is None:
@@ -498,19 +518,31 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 if pid is not None:
                     rust_params["pid"] = pid
 
-                rust_result = await _try_rust_plugin(session, plugin_lower, rust_params or None)
+                rust_result = await _try_rust_plugin(session, plugin_lower, rust_params if rust_params else None)
                 if rust_result is not None:
                     rust_result["engine"] = "rust"
+                    if result_filter:
+                        rust_result = _apply_filter(rust_result, result_filter)
                     return json_response(rust_result)
 
             # Tier 3: Vol3 fallback
+            vol3_kwargs = {}
+            if params:
+                for k, v in params.items():
+                    vol3_kwargs[k] = v
+            # Extract dump-dir for file output handling
+            dump_dir = vol3_kwargs.pop("dump-dir", vol3_kwargs.pop("dump_dir", None))
             result = vol3_run_plugin(
                 image_path=image_path,
                 plugin=plugin,
                 pid=pid,
+                dump_dir=dump_dir,
+                **vol3_kwargs,
             )
             if "error" not in result:
                 result["engine"] = "vol3"
+            if result_filter:
+                result = _apply_filter(result, result_filter)
             return json_response(result)
 
         elif name == "memory_list_plugins":

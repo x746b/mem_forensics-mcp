@@ -143,9 +143,18 @@ def run_plugin(
 
     logger.info(f"Running plugin: {plugin_name}")
 
+    # Build vol3 kwargs from explicit params + extras
+    vol3_kwargs = dict(kwargs)
+    if dump_dir:
+        vol3_kwargs["output_dir"] = dump_dir
+    if offset:
+        # Convert offset to list format for vol3 plugins that expect ListRequirement
+        offset_int = int(offset, 16) if isinstance(offset, str) and offset.startswith("0x") else int(offset)
+        vol3_kwargs["physaddr"] = [offset_int]
+
     try:
         # Run the plugin
-        results = session.run_plugin(plugin_name, **kwargs)
+        results = session.run_plugin(plugin_name, **vol3_kwargs)
 
         # Convert to list for JSON serialization
         results_list = list(results)
@@ -154,13 +163,18 @@ def run_plugin(
         if pid is not None:
             results_list = [r for r in results_list if r.get("PID") == pid]
 
-        return {
+        result = {
             "image_path": str(session.image_path),
             "plugin": plugin_name,
             "profile": session.profile,
             "result_count": len(results_list),
             "results": results_list,
         }
+
+        if dump_dir:
+            result["dump_dir"] = dump_dir
+
+        return result
 
     except ValueError as e:
         return {

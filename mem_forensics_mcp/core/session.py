@@ -204,12 +204,16 @@ class MemorySession:
         """Run a Vol3 plugin. For Rust plugins, use the server tier routing."""
         self._ensure_initialized()
 
+        # Lazy-init Vol3 runner if not yet created (e.g. Rust initialized first)
         if not self._runner:
-            raise RuntimeError("Vol3 not available for this session")
+            if not self.ensure_vol3_initialized():
+                raise RuntimeError("Vol3 not available for this session")
 
         def make_hashable(v):
             if isinstance(v, dict):
                 return tuple(sorted(v.items()))
+            if isinstance(v, list):
+                return tuple(v)
             return v
         cache_items = tuple((k, make_hashable(v)) for k, v in sorted(kwargs.items()))
         cache_key = f"{plugin_name}:{hash(cache_items)}"
