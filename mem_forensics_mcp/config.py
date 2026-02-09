@@ -21,8 +21,12 @@ MEMOXIDE_CALL_TIMEOUT = 30  # 30 seconds per Rust call
 # Paths
 DEFAULT_DUMP_DIR = Path("/tmp/memoryforensics_dumps")
 YARA_RULES_DIR = Path(__file__).parent.parent / "rules" / "memory_yara"
-MEMOXIDE_BINARY = Path(__file__).parent.parent / "engines" / "memoxide" / "memoxide"
-MEMOXIDE_SYMBOLS = Path(__file__).parent.parent / "engines" / "memoxide" / "symbols"
+_ENGINES_DIR = Path(__file__).parent.parent / "engines"
+# Prefer locally-built binary, fall back to prebuilt
+_BUILT_BINARY = _ENGINES_DIR / "memoxide-src" / "target" / "release" / "memoxide"
+_PREBUILT_BINARY = _ENGINES_DIR / "memoxide" / "memoxide"
+MEMOXIDE_BINARY = _BUILT_BINARY if _BUILT_BINARY.exists() else _PREBUILT_BINARY
+MEMOXIDE_SYMBOLS = _ENGINES_DIR / "memoxide" / "symbols"
 
 # Process reputation - known legitimate Windows processes
 # Used for anomaly detection

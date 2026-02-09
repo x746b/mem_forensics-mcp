@@ -1,0 +1,58 @@
+[package]
+name = "memoxide"
+version = "0.1.0"
+edition = "2021"
+description = "Pure Rust memory forensics MCP server"
+license = "MIT"
+
+[[bin]]
+name = "memoxide"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates
+isf = { path = "../isf" }
+
+# Memory layer (formerly voxide)
+memmap2 = "0.9"
+aho-corasick = "1.1"
+rayon = "1.10"
+lru = "0.12"
+parking_lot = "0.12"
+
+# MCP server
+rmcp = { version = "0.14", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1"
+
+# Crypto (hashdump)
+aes = "0.8"
+cbc = "0.1"
+des = "0.8"
+md-5 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+rc4 = "0.1"
+
+# PDB parsing + symbol server download
+pdb = "0.8"
+ureq = "2.9"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+memchr = "2"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3.10"
