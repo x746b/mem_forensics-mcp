@@ -305,16 +305,13 @@ class Vol3Runner:
             )
 
             # Apply plugin-specific parameters to the context config
+            # Note: Vol3 HierarchicalDict supports lists as data values
+            # directly. Do NOT use numbered entries (key.0, key.1) —
+            # that creates subdicts which config.get(key) won't find.
             for key, value in kwargs.items():
                 if value is not None:
                     config_key = f"{plugin_config_path}.{key}"
-                    if isinstance(value, list):
-                        # Vol3 ListRequirement expects numbered entries:
-                        # path.key.0 = val1, path.key.1 = val2, ...
-                        for i, item in enumerate(value):
-                            self._context.config[f"{config_key}.{i}"] = item
-                    else:
-                        self._context.config[config_key] = value
+                    self._context.config[config_key] = value
 
             # Run automagics for this plugin
             automagic.run(
@@ -585,3 +582,116 @@ def _make_file_handler_class(output_dir: str):
             os.rename(self._name, output_filename)
 
     return DirectFileHandler
+
+
+def run_vol3_cli(
+    image_path: str,
+    plugin_name: str,
+    output_dir: Optional[str] = None,
+    **kwargs,
+) -> list[dict[str, Any]]:
+    """
+    Run a vol3 plugin via CLI subprocess (Tier 3 fallback).
+
+    Used when the library API can't handle certain params (e.g. ListRequirement).
+    Parses the text table output into dicts.
+
+    Args:
+        image_path: Path to memory dump
+        plugin_name: Full plugin name (e.g. "windows.dumpfiles.DumpFiles")
+        output_dir: Directory for file output (-o flag)
+        **kwargs: Plugin arguments (--key value)
+
+    Returns:
+        List of row dicts parsed from vol3 text output
+    """
+    import subprocess
+    import csv
+    import io
+
+    vol3_root = os.environ.get("VOLATILITY3_PATH", "/opt/volatility3")
+    vol_py = os.path.join(vol3_root, "vol.py")
+    if not os.path.exists(vol_py):
+        raise FileNotFoundError(f"vol.py not found at {vol_py}")
+
+    # Build command
+    cmd = ["uv", "run", "--directory", vol3_root, "python", vol_py]
+    cmd.extend(["-f", str(image_path)])
+    cmd.extend(["-r", "csv"])  # CSV output for easy parsing
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        cmd.extend(["-o", str(output_dir)])
+    cmd.append(plugin_name)
+
+    # Add plugin kwargs as --key value
+    for key, value in kwargs.items():
+        cli_key = f"--{key.replace('_', '-')}"
+        if isinstance(value, list):
+            for item in value:
+                cmd.extend([cli_key, _format_cli_value(item)])
+        elif isinstance(value, bool):
+            if value:
+                cmd.append(cli_key)
+        elif value is not None:
+            cmd.extend([cli_key, _format_cli_value(value)])
+
+    logger.info(f"Vol3 CLI: {' '.join(cmd)}")
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Vol3 CLI timed out after 300s")
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise RuntimeError(f"Vol3 CLI failed: {stderr[:500]}")
+
+    # Parse CSV output
+    output = result.stdout.strip()
+    if not output:
+        return []
+
+    # Skip vol3 header lines (lines before the CSV data)
+    lines = output.split("\n")
+    # Find the CSV header (first line that looks like column names)
+    csv_start = 0
+    for i, line in enumerate(lines):
+        if "," in line and not line.startswith("Volatility"):
+            csv_start = i
+            break
+
+    csv_text = "\n".join(lines[csv_start:])
+    reader = csv.DictReader(io.StringIO(csv_text))
+    rows = []
+    for row in reader:
+        # Clean up values
+        clean_row = {}
+        for k, v in row.items():
+            if k is None:
+                continue
+            k = k.strip()
+            if v and v.strip():
+                # Try to convert numeric values
+                v = v.strip()
+                try:
+                    if v.startswith("0x"):
+                        clean_row[k] = int(v, 16)
+                    else:
+                        clean_row[k] = int(v)
+                except (ValueError, TypeError):
+                    clean_row[k] = v
+            else:
+                clean_row[k] = v
+        if clean_row:
+            rows.append(clean_row)
+
+    return rows
+
+
+def _format_cli_value(value: Any) -> str:
+    """Format a value for vol3 CLI argument."""
+    if isinstance(value, int):
+        return hex(value)
+    return str(value)

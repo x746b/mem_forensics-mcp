@@ -69,7 +69,12 @@ class MemorySession:
     def os_type(self) -> Optional[str]:
         if self._runner:
             return self._runner.os_type
-        return self._profile.get("os", "").lower() or None
+        if isinstance(self._profile, dict):
+            return self._profile.get("os", "").lower() or None
+        # Profile is a string (e.g. ISF path from Rust) — infer OS
+        if isinstance(self._profile, str) and "windows" in self._profile.lower():
+            return "windows"
+        return None
 
     @property
     def rust_session_id(self) -> Optional[str]:
@@ -183,8 +188,20 @@ class MemorySession:
         if not VOL3_AVAILABLE:
             return False
 
-        result = self.initialize()
-        return result.get("ready", False) and self._runner is not None
+        # Create Vol3 runner directly (bypass initialize() which may
+        # return early if session was already initialized by Rust)
+        try:
+            self._runner = Vol3Runner(self.image_path)
+            vol3_profile = self._runner.initialize()
+            # Merge Vol3 profile info if we only had Rust profile
+            if isinstance(self._profile, dict) and isinstance(vol3_profile, dict):
+                self._profile.update(vol3_profile)
+            elif isinstance(vol3_profile, dict):
+                self._profile = vol3_profile
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize Vol3 runner: {e}")
+            return False
 
     def _ensure_initialized(self) -> None:
         """Ensure the session is initialized (either engine)."""

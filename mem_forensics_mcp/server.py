@@ -149,6 +149,10 @@ async def _try_rust_analyze(image_path: str, **kwargs) -> dict[str, Any] | None:
         session = get_session(image_path)
         if session:
             profile = result.get("profile", result.get("detection", {}))
+            # Normalize profile to dict (Rust returns ISF path string)
+            if isinstance(profile, str):
+                os_name = "windows" if "windows" in profile.lower() else "unknown"
+                profile = {"os": os_name, "isf_path": profile}
             session.set_rust_session(result["session_id"], profile)
         return result
     return None

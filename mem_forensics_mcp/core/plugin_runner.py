@@ -9,7 +9,7 @@ import logging
 from typing import Any, Optional
 
 from .session import get_session
-from .vol3_runner import VOL3_AVAILABLE
+from .vol3_runner import VOL3_AVAILABLE, run_vol3_cli
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +152,15 @@ def run_plugin(
         offset_int = int(offset, 16) if isinstance(offset, str) and offset.startswith("0x") else int(offset)
         vol3_kwargs["physaddr"] = [offset_int]
 
+    # Check if any param is a list — vol3 library API mishandles ListRequirement
+    # config values, so fall back to CLI subprocess for reliable param passing
+    has_list_params = any(isinstance(v, list) for v in vol3_kwargs.values())
+
+    if has_list_params:
+        return _run_via_cli(image_path, plugin_name, pid, dump_dir, session, vol3_kwargs)
+
     try:
-        # Run the plugin
+        # Run the plugin via library API
         results = session.run_plugin(plugin_name, **vol3_kwargs)
 
         # Convert to list for JSON serialization
@@ -186,6 +193,54 @@ def run_plugin(
         logger.exception(f"Plugin {plugin_name} failed")
         return {
             "error": f"Plugin execution failed: {e}",
+            "plugin": plugin_name,
+        }
+
+
+def _run_via_cli(
+    image_path: str,
+    plugin_name: str,
+    pid: Optional[int],
+    dump_dir: Optional[str],
+    session,
+    vol3_kwargs: dict,
+) -> dict[str, Any]:
+    """Run plugin via vol3 CLI subprocess (handles ListRequirement params correctly)."""
+    # Build CLI kwargs (exclude output_dir which maps to -o flag)
+    cli_kwargs = {}
+    for k, v in vol3_kwargs.items():
+        if k == "output_dir":
+            continue
+        cli_kwargs[k] = v
+    if pid is not None:
+        cli_kwargs["pid"] = [pid]
+
+    try:
+        results_list = run_vol3_cli(
+            image_path=image_path,
+            plugin_name=plugin_name,
+            output_dir=dump_dir,
+            **cli_kwargs,
+        )
+
+        result = {
+            "image_path": str(image_path),
+            "plugin": plugin_name,
+            "profile": session.profile if session else {},
+            "result_count": len(results_list),
+            "results": results_list,
+            "engine_mode": "vol3-cli",
+        }
+
+        if dump_dir:
+            result["dump_dir"] = dump_dir
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Vol3 CLI failed for {plugin_name}")
+        return {
+            "error": f"Vol3 CLI failed: {e}",
             "plugin": plugin_name,
         }
 
