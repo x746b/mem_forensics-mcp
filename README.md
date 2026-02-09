@@ -1,3 +1,6 @@
+<img src="icon.png" width="150" alt="Memory forensics MCP">
+
+
 # mem-forensics-mcp
 
 > **Unified Memory Forensics MCP Server** - Multi-tier engine combining Rust speed with Vol3 coverage.
@@ -255,3 +258,11 @@ The key design principle: the LLM (or analyst) never needs to know which tier ha
 ## License
 
 MIT License
+
+---
+
+## Author
+
+__xtk__
+
+Built for the DFIR community. No Windows required >)
