@@ -164,7 +164,13 @@ class MemoxideClient:
                     future = self._pending.pop(msg_id)
                     if not future.done():
                         if "error" in msg:
-                            future.set_result(None)
+                            # Propagate error info instead of silently returning None
+                            error_info = msg["error"]
+                            if isinstance(error_info, dict):
+                                error_msg = error_info.get("message", str(error_info))
+                            else:
+                                error_msg = str(error_info)
+                            future.set_result({"_rust_error": error_msg})
                         else:
                             future.set_result(msg.get("result"))
 
@@ -250,6 +256,10 @@ class MemoxideClient:
 
         if result is None:
             return None
+
+        # Check for Rust engine error (propagated from _read_responses)
+        if isinstance(result, dict) and "_rust_error" in result:
+            return {"error": result["_rust_error"], "engine": "rust"}
 
         # MCP tools return content array - extract text
         content = result.get("content", [])

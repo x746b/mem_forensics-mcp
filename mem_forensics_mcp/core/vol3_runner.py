@@ -308,7 +308,13 @@ class Vol3Runner:
             for key, value in kwargs.items():
                 if value is not None:
                     config_key = f"{plugin_config_path}.{key}"
-                    self._context.config[config_key] = value
+                    if isinstance(value, list):
+                        # Vol3 ListRequirement expects numbered entries:
+                        # path.key.0 = val1, path.key.1 = val2, ...
+                        for i, item in enumerate(value):
+                            self._context.config[f"{config_key}.{i}"] = item
+                    else:
+                        self._context.config[config_key] = value
 
             # Run automagics for this plugin
             automagic.run(

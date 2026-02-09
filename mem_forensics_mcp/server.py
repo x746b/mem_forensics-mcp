@@ -73,6 +73,9 @@ RUST_PLUGINS = {
     "netscan", "cmdscan", "search", "readraw", "rsds",
 }
 
+# Plugins that ONLY exist in Rust (no Vol3 fallback)
+RUST_ONLY_PLUGINS = {"search", "readraw", "rsds"}
+
 
 def _get_memoxide() -> MemoxideClient:
     """Get or create the global MemoxideClient."""
@@ -520,10 +523,24 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
                 rust_result = await _try_rust_plugin(session, plugin_lower, rust_params if rust_params else None)
                 if rust_result is not None:
-                    rust_result["engine"] = "rust"
-                    if result_filter:
-                        rust_result = _apply_filter(rust_result, result_filter)
-                    return json_response(rust_result)
+                    # Check if Rust returned an error
+                    if "error" in rust_result:
+                        if plugin_lower in RUST_ONLY_PLUGINS:
+                            # No Vol3 fallback for Rust-only plugins — return the error
+                            return json_response(rust_result)
+                        # For shared plugins, fall through to Vol3
+                        logger.info(f"Rust plugin '{plugin}' failed, falling back to Vol3: {rust_result.get('error')}")
+                    else:
+                        rust_result.setdefault("engine", "rust")
+                        if result_filter:
+                            rust_result = _apply_filter(rust_result, result_filter)
+                        return json_response(rust_result)
+                elif plugin_lower in RUST_ONLY_PLUGINS:
+                    # Rust unavailable and plugin is Rust-only
+                    return json_response({
+                        "error": f"Plugin '{plugin}' requires the Rust engine (memoxide) which is not available",
+                        "hint": "Ensure image is initialized with memory_analyze_image first",
+                    })
 
             # Tier 3: Vol3 fallback
             vol3_kwargs = {}
