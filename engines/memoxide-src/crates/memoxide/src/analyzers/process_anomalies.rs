@@ -231,15 +231,16 @@ fn detect_parent_child_violations(
                         rule.expected_parents.join(", "),
                     ),
                 )
-            } else if parent_exists && rule.parent_may_exit && is_pid_reuse(proc, &create_time_by_pid)
+            } else if parent_exists && rule.parent_may_exit && is_pid_reuse(proc, procs, &create_time_by_pid)
             {
-                // Case 2: Parent exists but wrong name, and timestamps indicate
-                // PID reuse (parent created after child).
+                // Case 2: Parent exists but wrong name, and evidence indicates
+                // PID reuse (parent created after child, parent terminated, or
+                // sibling smss-child processes share the same PPID).
                 (
                     Severity::Info,
                     format!(
-                        "'{}' (PID {}) has parent '{}' (PID {}) which was created after it — \
-                         likely PID reuse after original parent [{}] exited.",
+                        "'{}' (PID {}) has parent '{}' (PID {}) — \
+                         PID reuse detected (original parent [{}] exited after boot).",
                         proc.name,
                         proc.pid,
                         parent_name,
@@ -285,19 +286,56 @@ fn detect_parent_child_violations(
     }
 }
 
-/// Check if a process's parent PID was likely reused by comparing create times.
-/// Returns true if the parent was created after the child (impossible for a real parent).
-fn is_pid_reuse(child: &ProcessInfo, create_time_by_pid: &HashMap<u64, &str>) -> bool {
-    let child_time = match child.create_time.as_deref() {
-        Some(t) if !t.is_empty() => t,
-        _ => return false, // Can't determine without timestamps
-    };
-    let parent_time = match create_time_by_pid.get(&child.ppid) {
-        Some(t) if !t.is_empty() => *t,
-        _ => return false,
-    };
-    // String comparison works for ISO 8601 / "YYYY-MM-DD HH:MM:SS" timestamps
-    parent_time > child_time
+/// Processes created by short-lived child smss.exe instances during boot.
+const SMSS_CHILD_SPAWNS: &[&str] = &["csrss.exe", "wininit.exe", "winlogon.exe"];
+
+/// Check if a process's parent PID was likely reused after the original parent exited.
+///
+/// Uses three independent signals:
+///   1. **Timestamp ordering**: parent created after child (impossible for real parent).
+///   2. **Terminated parent**: current PID holder has exit_time or 0 threads.
+///   3. **Sibling detection**: multiple smss-child processes share the same PPID
+///      (e.g. csrss.exe + wininit.exe both have PPID 484 → child smss.exe PID reuse).
+fn is_pid_reuse(
+    child: &ProcessInfo,
+    all_procs: &[ProcessInfo],
+    create_time_by_pid: &HashMap<u64, &str>,
+) -> bool {
+    // Signal 1: Parent created after child
+    let child_time = child.create_time.as_deref().unwrap_or("");
+    let parent_time = create_time_by_pid.get(&child.ppid).copied().unwrap_or("");
+    if !child_time.is_empty() && !parent_time.is_empty() && parent_time > child_time {
+        return true;
+    }
+
+    // Signal 2: Current PID holder is terminated
+    if let Some(parent) = all_procs.iter().find(|p| p.pid == child.ppid) {
+        if parent.exit_time.is_some() {
+            return true;
+        }
+        if parent.threads == Some(0) {
+            return true;
+        }
+    }
+
+    // Signal 3: Sibling smss-child processes share the same PPID
+    // (e.g. csrss.exe + wininit.exe both parented by same dead child smss.exe)
+    if SMSS_CHILD_SPAWNS.iter().any(|s| s.eq_ignore_ascii_case(&child.name)) {
+        let sibling_count = all_procs
+            .iter()
+            .filter(|p| {
+                p.ppid == child.ppid
+                    && SMSS_CHILD_SPAWNS
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(&p.name))
+            })
+            .count();
+        if sibling_count >= 2 {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Detect singleton process violations (e.g., multiple lsass.exe).
@@ -772,6 +810,75 @@ mod tests {
         assert_eq!(csrss_violations.len(), 1);
         assert_eq!(csrss_violations[0].severity, Severity::Info, "PID reuse should be info");
         assert!(csrss_violations[0].description.contains("PID reuse"));
+    }
+
+    #[test]
+    fn test_pid_reuse_same_timestamp_sibling_detection() {
+        // When child smss.exe exits and its PID is reused within the same second,
+        // timestamp comparison can't detect it. Sibling detection catches it:
+        // csrss.exe + wininit.exe both share the same PPID → child smss.exe PID reuse.
+        let mut csrss = make_proc(500, 450, "csrss.exe");
+        csrss.create_time = Some("2024-01-01T00:00:00Z".to_string());
+        let mut wininit = make_proc(550, 450, "wininit.exe");
+        wininit.create_time = Some("2024-01-01T00:00:00Z".to_string());
+        let mut other = make_proc(450, 400, "LogonUI.exe");
+        other.create_time = Some("2024-01-01T00:00:00Z".to_string()); // Same timestamp
+
+        let procs = vec![
+            make_proc(4, 0, "System"),
+            make_proc(100, 4, "smss.exe"),
+            csrss,
+            wininit,
+            other,
+        ];
+
+        let report = analyze(&procs, None, None);
+
+        // Both csrss and wininit should be Info, not Critical
+        for pid in [500, 550] {
+            let violations: Vec<_> = report
+                .anomalies
+                .iter()
+                .filter(|a| a.category == "parent_child_violation" && a.pid == pid)
+                .collect();
+            assert_eq!(violations.len(), 1, "Expected 1 violation for PID {pid}");
+            assert_eq!(
+                violations[0].severity, Severity::Info,
+                "PID {pid} ({}) should be Info (sibling detection), got {:?}",
+                violations[0].process_name, violations[0].severity
+            );
+        }
+    }
+
+    #[test]
+    fn test_pid_reuse_terminated_parent_detection() {
+        // When the current PID holder is terminated (has exit_time), it signals
+        // PID reuse even without timestamp ordering or sibling evidence.
+        let mut csrss = make_proc(500, 450, "csrss.exe");
+        csrss.create_time = Some("2024-01-01T00:00:00Z".to_string());
+        let mut terminated = make_proc(450, 400, "LogonUI.exe");
+        terminated.create_time = Some("2024-01-01T00:00:00Z".to_string());
+        terminated.exit_time = Some("2024-01-01T00:02:00Z".to_string());
+
+        let procs = vec![
+            make_proc(4, 0, "System"),
+            make_proc(100, 4, "smss.exe"),
+            csrss,
+            terminated,
+        ];
+
+        let report = analyze(&procs, None, None);
+
+        let violations: Vec<_> = report
+            .anomalies
+            .iter()
+            .filter(|a| a.category == "parent_child_violation" && a.pid == 500)
+            .collect();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(
+            violations[0].severity, Severity::Info,
+            "Terminated parent should trigger PID reuse detection"
+        );
     }
 
     #[test]

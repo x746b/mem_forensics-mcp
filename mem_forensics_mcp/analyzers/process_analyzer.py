@@ -23,6 +23,72 @@ from ..utils.parent_child_rules import (
 
 logger = logging.getLogger(__name__)
 
+# Processes created by short-lived child smss.exe instances during boot.
+# Child smss.exe spawns these then exits; its PID often gets reused,
+# causing false parent-child alerts.
+_SMSS_CHILD_SPAWNS = {"csrss.exe", "wininit.exe", "winlogon.exe"}
+
+
+def _is_smss_pid_reuse(
+    child_name: str,
+    ppid: int,
+    pid_to_proc: dict[int, dict],
+) -> bool:
+    """
+    Detect PID reuse from a terminated child smss.exe.
+
+    During boot, master smss.exe spawns a child instance per session.
+    Each child creates csrss.exe + wininit.exe (session 0) or
+    csrss.exe + winlogon.exe (session 1+), then exits.  Its PID is
+    recycled by the OS, so the PPID stored in EPROCESS now points at
+    an unrelated (often terminated) process.
+
+    Detection signals:
+      1. Multiple smss-child processes share the same PPID (strong).
+      2. The current PID holder is terminated (0 threads / has ExitTime).
+      3. No running smss.exe holds that PID.
+    """
+    if child_name.lower() not in _SMSS_CHILD_SPAWNS:
+        return False
+
+    parent_proc = pid_to_proc.get(ppid)
+    if parent_proc is None:
+        # Parent PID not in active list at all — dead child smss.exe,
+        # PID not yet reused.  This is normal and won't trigger
+        # UNUSUAL_PARENT because parent_name would be "unknown".
+        return False
+
+    parent_name = (
+        parent_proc.get("ImageFileName")
+        or parent_proc.get("name")
+        or ""
+    ).lower()
+
+    # If parent IS smss.exe, the relationship is genuine — no reuse.
+    if parent_name == "smss.exe":
+        return False
+
+    # Signal 1: sibling smss-child processes share the same PPID.
+    # E.g. csrss.exe (PPID 484) + wininit.exe (PPID 484).
+    siblings = sum(
+        1 for p in pid_to_proc.values()
+        if (p.get("PPID") or p.get("ppid")) == ppid
+        and (p.get("ImageFileName") or p.get("name") or "").lower()
+            in _SMSS_CHILD_SPAWNS
+    )
+    if siblings >= 2:
+        return True
+
+    # Signal 2: current PID holder is terminated (0 threads or ExitTime set).
+    threads = parent_proc.get("Threads") or parent_proc.get("threads")
+    exit_time = parent_proc.get("ExitTime") or parent_proc.get("exit_time")
+    if threads is not None and int(threads) == 0:
+        return True
+    if exit_time and str(exit_time) not in ("", "N/A", "None"):
+        return True
+
+    return False
+
 
 @dataclass
 class ProcessFinding:
@@ -176,11 +242,21 @@ def hunt_process_anomalies(
         if parent_name and parent_name != "unknown":
             is_valid, reason = is_valid_parent(name, parent_name)
             if not is_valid:
-                anomaly.findings.append(ProcessFinding(
-                    type="UNUSUAL_PARENT",
-                    detail=reason,
-                    severity="HIGH",
-                ))
+                if _is_smss_pid_reuse(name, ppid, pid_to_proc):
+                    anomaly.findings.append(ProcessFinding(
+                        type="PID_REUSE",
+                        detail=(
+                            f"{name} PPID {ppid} now held by {parent_name} "
+                            f"(PID reuse — real parent was child smss.exe that exited after boot)"
+                        ),
+                        severity="INFO",
+                    ))
+                else:
+                    anomaly.findings.append(ProcessFinding(
+                        type="UNUSUAL_PARENT",
+                        detail=reason,
+                        severity="HIGH",
+                    ))
 
         # Check singleton violations
         rule = get_process_rule(name)
@@ -221,8 +297,10 @@ def hunt_process_anomalies(
                 anomaly.risk_score = "HIGH"
             elif "MEDIUM" in severities:
                 anomaly.risk_score = "MEDIUM"
-            else:
+            elif "LOW" in severities:
                 anomaly.risk_score = "LOW"
+            else:
+                anomaly.risk_score = "INFO"
             anomalies.append(anomaly)
         elif include_normal:
             all_processes.append(anomaly.to_dict())
@@ -380,7 +458,13 @@ def get_process_tree(
             if parent_name:
                 is_valid, reason = is_valid_parent(name, parent_name)
                 if not is_valid:
-                    suspicious_indicators.append(f"Unusual parent: {reason}")
+                    ppid = proc.get("ppid")
+                    if ppid is not None and _is_smss_pid_reuse(name, ppid, pid_to_proc):
+                        suspicious_indicators.append(
+                            f"PID reuse (benign): PPID {ppid} was child smss.exe, now {parent_name}"
+                        )
+                    else:
+                        suspicious_indicators.append(f"Unusual parent: {reason}")
 
             # Check name
             is_suspicious, reason = is_suspicious_name(name)
