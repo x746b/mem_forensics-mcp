@@ -205,6 +205,44 @@ memory_run_plugin(image_path="memory.raw", plugin="dumpfiles",
 
 ---
 
+## Why Multi-Tier? Real-World Testing Observations
+
+Tested on several different memory dumps (Win7 SP1 through Win11, x64, both VirtualBox and VMware images).
+
+### Tier 1 (Rust) — Speed Where It Matters
+
+The Rust engine handles the plugins that get called most frequently during investigation. The `search` plugin is the standout:
+
+- **Full-dump byte search** scans 500MB-1GB dumps in seconds, finding ASCII and UTF-16LE strings anywhere in physical memory
+- A single `search` call can locate email content, browser JSON blobs, embedded URLs, and credential fragments buried deep in physical memory — data that would otherwise require chaining multiple Vol3 plugins (pslist, memdump, strings) to extract
+- Process listing (`pslist`), command lines (`cmdline`), and network connections (`netscan`) return instantly, enabling rapid triage of 50-100+ process dumps
+
+The speed advantage compounds during `full_triage`, where Tier 1 collects pslist + psscan + cmdline + netscan + malfind + cmdscan data in ~2s, compared to ~30s+ for Vol3 equivalents.
+
+### Tier 2 (Python Analyzers) — Intelligence Layer
+
+Raw plugin output is data. Tier 2 turns it into findings:
+
+- **Process anomaly detection** cross-references pslist vs psscan (DKOM detection) and validates parent-child relationships against Windows rules — reduces 50+ processes to a handful of actionable anomalies
+- **PID reuse handling** distinguishes terminated parent processes from truly suspicious orphans, eliminating false positives that plague naive parent-child checks
+- **Full triage orchestrator** correlates across all data sources: processes with RWX regions + external network connections = "active implant" correlation. This multi-source correlation elevates raw data into risk scores and IOC lists
+- **C2 detection** enriches netscan results with process context — svchost connecting to external IPs on unusual ports gets flagged, while the same connection from a browser does not
+
+### Tier 3 (Vol3) — Coverage for Everything Else
+
+Vol3 handles the long tail of forensic needs:
+
+- `filescan` + `dumpfiles` for file extraction from memory cache (documents, archives, browser databases)
+- `handles`, `svcscan`, `driverscan` for deep-dive investigation
+- Server-side `filter` parameter greps results before returning — e.g. `filescan` with `filter="keyword"` returns matching entries from thousands of cached files
+- CLI fallback for `ListRequirement` params (e.g., `dumpfiles` with `physaddr` lists) that Vol3's Python API mishandles
+
+### Tier Routing Is Invisible
+
+The key design principle: the LLM (or analyst) never needs to know which tier handles a request. `memory_run_plugin(plugin="pslist")` routes to Rust; `memory_run_plugin(plugin="filescan")` routes to Vol3. If Rust fails, Vol3 takes over. The routing is an implementation detail, not a user concern.
+
+---
+
 ## Related Projects
 
 | Project | Focus |

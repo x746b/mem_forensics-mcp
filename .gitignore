@@ -9,3 +9,6 @@ build/
 
 # Rust build artifacts
 engines/memoxide-src/target/
+
+# ISF symbol files (large, downloaded per-image)
+symbols/
