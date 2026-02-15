@@ -1,6 +1,6 @@
 [project]
 name = "mem-forensics-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "Unified Memory Forensics MCP Server - Multi-tier engine (Rust + Python + Vol3)"
 readme = "README.md"
 license = { text = "MIT" }
@@ -53,6 +53,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mem_forensics_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"engines/memoxide/x86_64/memoxide" = "engines/memoxide/x86_64/memoxide"
+"engines/memoxide/aarch64/memoxide" = "engines/memoxide/aarch64/memoxide"
+
+[tool.hatch.build.targets.sdist.force-include]
+"engines/memoxide/x86_64/memoxide" = "engines/memoxide/x86_64/memoxide"
+"engines/memoxide/aarch64/memoxide" = "engines/memoxide/aarch64/memoxide"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
