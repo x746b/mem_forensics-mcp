@@ -42,12 +42,10 @@ pub fn run_with_head(
         debug!("Using KDBG PsActiveProcessHead override: {:#x}", addr);
         addr
     } else {
-        // Get PsActiveProcessHead address from symbols
         let ps_head_rva = symbols
             .get_symbol("PsActiveProcessHead")
             .ok_or("Symbol PsActiveProcessHead not found in ISF")?;
 
-        // Apply kernel base relocation if provided
         if let Some(base) = kernel_base {
             base + ps_head_rva
         } else {
@@ -57,12 +55,10 @@ pub fn run_with_head(
 
     debug!("PsActiveProcessHead at {:#x}", ps_head_addr);
 
-    // Verify _EPROCESS type exists
     if symbols.get_type("_EPROCESS").is_none() {
         return Err("Type _EPROCESS not found in ISF symbols".to_string());
     }
 
-    // Get the offset of ActiveProcessLinks within _EPROCESS
     let links_offset = symbols
         .field_offset("_EPROCESS", "ActiveProcessLinks")
         .ok_or("Field _EPROCESS.ActiveProcessLinks not found")?;
@@ -78,7 +74,6 @@ pub fn run_with_head(
     const MAX_PROCESSES: usize = 2000;
 
     while current_flink != 0 && processes.len() < MAX_PROCESSES {
-        // Cycle detection: stop if we've seen this flink address before
         if !visited.insert(current_flink) {
             debug!("Cycle detected at flink {:#x}, stopping walk", current_flink);
             break;
@@ -98,7 +93,6 @@ pub fn run_with_head(
             }
         }
 
-        // Follow Flink to next entry
         match read_pointer(symbols, memory, current_flink) {
             Ok(next) => current_flink = next,
             Err(e) => {
@@ -116,7 +110,6 @@ pub fn run_with_head(
     Ok(processes)
 }
 
-/// Read an _EPROCESS structure and extract process info.
 fn read_eprocess(
     symbols: &IsfSymbols,
     memory: &dyn MemoryAccess,
@@ -125,17 +118,14 @@ fn read_eprocess(
     let reader = StructReader::new(symbols, memory, addr, "_EPROCESS")
         .map_err(|e| format!("StructReader error: {}", e))?;
 
-    // PID
     let pid = reader
         .read_pointer("UniqueProcessId")
         .map_err(|e| format!("read PID: {}", e))?;
 
-    // PPID (InheritedFromUniqueProcessId)
     let ppid = reader
         .read_pointer("InheritedFromUniqueProcessId")
         .unwrap_or(0);
 
-    // ImageFileName (15-byte ASCII)
     let name = reader.read_string("ImageFileName", 15).unwrap_or_default();
 
     // Create time (Windows FILETIME: 100ns intervals since 1601-01-01)
@@ -144,16 +134,13 @@ fn read_eprocess(
         .ok()
         .and_then(|t| filetime_to_iso(t));
 
-    // Exit time
     let exit_time = reader
         .read_u64("ExitTime")
         .ok()
         .and_then(|t| filetime_to_iso(t));
 
-    // Thread count
     let threads = reader.read_u32("ActiveThreads").ok();
 
-    // Session ID
     let session_id = if symbols.field_offset("_EPROCESS", "SessionId").is_some() {
         reader.read_u32("SessionId").ok()
     } else {
@@ -161,7 +148,6 @@ fn read_eprocess(
         None
     };
 
-    // Wow64 (32-bit process on 64-bit OS)
     let wow64 = if symbols.field_offset("_EPROCESS", "Wow64Process").is_some() {
         reader.read_pointer("Wow64Process").ok().map(|v| v != 0)
     } else {
@@ -182,7 +168,6 @@ fn read_eprocess(
     })
 }
 
-/// Read a pointer-sized value from memory.
 fn read_pointer(symbols: &IsfSymbols, memory: &dyn MemoryAccess, addr: u64) -> Result<u64, String> {
     let ptr_size = symbols.pointer_size;
     let bytes = memory

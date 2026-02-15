@@ -98,7 +98,6 @@ impl Intel64Translator {
         value & (high_mask ^ low_mask)
     }
 
-    /// Check if a page entry is valid (present).
     #[inline]
     fn page_is_valid(entry: u64) -> bool {
         entry & PAGE_PRESENT != 0
@@ -110,20 +109,17 @@ impl Intel64Translator {
         Self::mask(entry, MAXPHYADDR - 1, 0) >> PAGE_SHIFT
     }
 
-    /// Get the address mask.
     #[inline]
     fn address_mask(&self) -> u64 {
         (1u64 << MAXVIRTADDR) - 1
     }
 
-    /// Read from the base layer.
     fn read_base_layer(&self, offset: u64, length: usize) -> Vol3Result<Vec<u8>> {
         self.base_layer.read(offset, length)
     }
 
     /// Get a valid page table, checking for duplicate entries.
     fn get_valid_table(&self, base_address: u64) -> Vol3Result<Option<Vec<u8>>> {
-        // Check cache first
         {
             let mut cache = self.table_cache.lock();
             if let Some(cached) = cache.get(&base_address) {
@@ -131,7 +127,6 @@ impl Intel64Translator {
             }
         }
 
-        // Read the table
         let table = match self.read_base_layer(base_address, PAGE_SIZE_4K as usize) {
             Ok(t) => t,
             Err(_) => {
@@ -153,15 +148,12 @@ impl Intel64Translator {
             }
         }
 
-        // Cache and return
         let mut cache = self.table_cache.lock();
         cache.put(base_address, Some(table.clone()));
         Ok(Some(table))
     }
 
-    /// Translate a page address through the page tables.
     fn translate_entry(&self, page_address: u64) -> Vol3Result<CacheEntry> {
-        // Check cache first
         {
             let mut cache = self.entry_cache.lock();
             if let Some(cached) = cache.get(&page_address) {
@@ -169,7 +161,6 @@ impl Intel64Translator {
             }
         }
 
-        // Validate address range
         if page_address & self.address_mask() > Self::maximum_address_static() {
             return Err(Vol3Error::paged_invalid_address(
                 &self.name,
@@ -196,7 +187,6 @@ impl Intel64Translator {
                 ));
             }
 
-            // Calculate base address of next table
             // Use index_shift of 3 (log2(8) for 8-byte entries)
             let base_address = Self::mask(entry, MAXPHYADDR - 1, *size + 3);
 

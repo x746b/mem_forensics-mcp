@@ -334,7 +334,6 @@ fn walk_vad_tree(
             continue;
         }
 
-        // Read left/right child pointers and push onto stack
         if let Ok(left) = read_ptr(kernel_vm, node_addr + layout.left_offset as u64, ptr_size) {
             if left != 0 {
                 stack.push(left);
@@ -346,7 +345,6 @@ fn walk_vad_tree(
             }
         }
 
-        // Read VPN fields
         let (start_vpn, end_vpn) = match layout.vpn_size {
             4 => {
                 let s = read_u32_at(kernel_vm, node_addr + layout.starting_vpn_offset as u64)
@@ -377,7 +375,6 @@ fn walk_vad_tree(
         let start_va = start_vpn << 12;
         let end_va = ((end_vpn + 1) << 12) - 1; // inclusive end
 
-        // Read flags
         let flags_addr = node_addr + layout.flags_offset as u64;
         let flags_value = match layout.flags_size {
             4 => read_u32_at(kernel_vm, flags_addr).unwrap_or(0) as u64,
@@ -429,7 +426,6 @@ pub fn run(
     let mut results = Vec::new();
 
     for proc in &processes {
-        // Apply PID filter
         if let Some(pids) = pid_filter {
             if !pids.contains(&proc.pid) {
                 continue;
@@ -490,13 +486,10 @@ fn scan_process_vads(
         return Ok(Vec::new());
     }
 
-    // Walk the VAD tree via kernel VM (VAD nodes are in kernel space)
     let vad_entries = walk_vad_tree(kernel_vm, layout, root_ptr, ptr_size);
 
-    // Filter for RWX regions and inspect content
     let mut regions = Vec::new();
 
-    // Read DTB for per-process VM
     let dtb = match cmdline::read_process_dtb(symbols, kernel_vm, eprocess_addr) {
         Ok(d) => d,
         Err(e) => {

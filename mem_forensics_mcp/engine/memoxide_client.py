@@ -91,10 +91,8 @@ class MemoxideClient:
                 limit=16 * 1024 * 1024,  # 16MB readline buffer (triage JSON can be large)
             )
 
-            # Start reader task for responses
             self._reader_task = asyncio.create_task(self._read_responses())
 
-            # Send MCP initialize
             init_result = await self._send_request("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
@@ -102,7 +100,6 @@ class MemoxideClient:
             })
 
             if init_result is not None:
-                # Send initialized notification
                 await self._send_notification("notifications/initialized", {})
                 self._initialized = True
                 logger.info("Memoxide engine started successfully")
@@ -147,14 +144,12 @@ class MemoxideClient:
             self._stderr_file = None
 
         self._initialized = False
-        # Cancel all pending futures
         for future in self._pending.values():
             if not future.done():
                 future.cancel()
         self._pending.clear()
 
     async def _read_responses(self) -> None:
-        """Background task to read JSON-RPC responses from stdout."""
         try:
             while self._process and self._process.returncode is None:
                 line = await self._process.stdout.readline()
@@ -170,7 +165,6 @@ class MemoxideClient:
                 except json.JSONDecodeError:
                     continue
 
-                # Match response to pending request
                 msg_id = msg.get("id")
                 if msg_id is not None and msg_id in self._pending:
                     future = self._pending.pop(msg_id)
@@ -269,11 +263,9 @@ class MemoxideClient:
         if result is None:
             return None
 
-        # Check for Rust engine error (propagated from _read_responses)
         if isinstance(result, dict) and "_rust_error" in result:
             return {"error": result["_rust_error"], "engine": "rust"}
 
-        # MCP tools return content array - extract text
         content = result.get("content", [])
         if content and isinstance(content, list):
             for item in content:

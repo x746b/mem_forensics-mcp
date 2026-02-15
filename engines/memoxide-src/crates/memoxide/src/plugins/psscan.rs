@@ -45,7 +45,6 @@ pub fn run_limited(
     let image_size = image.size();
     let limit = max_scan_bytes.unwrap_or(image_size).min(image_size);
 
-    // Determine _POOL_HEADER size from ISF
     let pool_header_size = symbols
         .type_size("_POOL_HEADER")
         .unwrap_or(pool_header_size_default(symbols.pointer_size));
@@ -80,7 +79,6 @@ pub fn run_limited(
             }
         };
 
-        // Scan for all pool tag variants
         for tag in &[POOL_TAG_PROC, POOL_TAG_PROC_PROTECTED, POOL_TAG_PROC_WIN10] {
             scan_chunk_for_tag(
                 &chunk,
@@ -131,7 +129,6 @@ fn scan_chunk_for_tag(
     let eprocess_size = symbols.type_size("_EPROCESS").unwrap_or(0);
     let alignment = pool_alignment(symbols.pointer_size);
 
-    // Search for the tag in the chunk
     let mut pos = 0;
     while pos + tag.len() <= chunk.len() {
         // Early exit if we've hit the result limit
@@ -189,12 +186,10 @@ fn scan_chunk_for_tag(
                 pool_header_addr + pool_header_size as u64
             };
 
-            // Skip duplicates
             if !seen_offsets.insert(eprocess_addr) {
                 continue;
             }
 
-            // Validate this looks like a real _EPROCESS
             match validate_eprocess(symbols, image, eprocess_addr) {
                 Ok(Some(proc)) => {
                     debug!(
@@ -388,22 +383,18 @@ fn validate_eprocess(
         return Ok(None);
     }
 
-    // Thread count
     let threads = reader.read_u32("ActiveThreads").ok();
 
-    // Read create time
     let create_time = reader
         .read_u64("CreateTime")
         .ok()
         .and_then(|t| super::pslist::filetime_to_iso(t));
 
-    // Read exit time
     let exit_time = reader
         .read_u64("ExitTime")
         .ok()
         .and_then(|t| super::pslist::filetime_to_iso(t));
 
-    // Session ID
     let session_id = if symbols.field_offset("_EPROCESS", "SessionId").is_some() {
         reader.read_u32("SessionId").ok()
     } else {

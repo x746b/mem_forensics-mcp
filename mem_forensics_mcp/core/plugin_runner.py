@@ -42,7 +42,6 @@ def list_available_plugins(image_path: str) -> dict[str, Any]:
         "plugins": {},
     }
 
-    # Get plugins based on OS
     try:
         if os_type == "windows":
             from volatility3.plugins import windows
@@ -66,15 +65,12 @@ def _get_plugin_list(module, os_name: str) -> dict[str, list[str]]:
 
     plugins_by_category: dict[str, list[str]] = {}
 
-    # Get submodules (categories)
     try:
         for importer, modname, ispkg in pkgutil.iter_modules(module.__path__):
             if ispkg:
-                # It's a category (subpackage)
                 category = modname
                 try:
                     submodule = importlib.import_module(f"volatility3.plugins.{os_name}.{modname}")
-                    # Get plugin classes in this category
                     plugin_names = []
                     for name in dir(submodule):
                         obj = getattr(submodule, name)
@@ -85,7 +81,6 @@ def _get_plugin_list(module, os_name: str) -> dict[str, list[str]]:
                 except Exception:
                     pass
             else:
-                # It's a direct plugin module
                 try:
                     submodule = importlib.import_module(f"volatility3.plugins.{os_name}.{modname}")
                     for name in dir(submodule):
@@ -138,12 +133,10 @@ def run_plugin(
     if not init_result.get("ready"):
         return {"error": init_result.get("error", "Failed to initialize")}
 
-    # Normalize plugin name
     plugin_name = _normalize_plugin_name(plugin, session.os_type)
 
     logger.info(f"Running plugin: {plugin_name}")
 
-    # Build vol3 kwargs from explicit params + extras
     vol3_kwargs = dict(kwargs)
     if dump_dir:
         vol3_kwargs["output_dir"] = dump_dir
@@ -160,13 +153,10 @@ def run_plugin(
         return _run_via_cli(image_path, plugin_name, pid, dump_dir, session, vol3_kwargs)
 
     try:
-        # Run the plugin via library API
         results = session.run_plugin(plugin_name, **vol3_kwargs)
 
-        # Convert to list for JSON serialization
         results_list = list(results)
 
-        # Filter by PID if specified
         if pid is not None:
             results_list = [r for r in results_list if r.get("PID") == pid]
 
@@ -189,7 +179,6 @@ def run_plugin(
         cli_result = _run_via_cli(image_path, plugin_name, pid, dump_dir, session, vol3_kwargs)
         if "error" not in cli_result:
             return cli_result
-        # Both paths failed — include suggestions
         logger.warning(f"Both library API and CLI failed for {plugin_name}")
         suggestions = _suggest_plugins(plugin, session.os_type if session else None)
         result = {
@@ -212,7 +201,6 @@ def _run_via_cli(
     vol3_kwargs: dict,
 ) -> dict[str, Any]:
     """Run plugin via vol3 CLI subprocess (handles ListRequirement params correctly)."""
-    # Build CLI kwargs (exclude output_dir which maps to -o flag)
     cli_kwargs = {}
     for k, v in vol3_kwargs.items():
         if k == "output_dir":
@@ -263,23 +251,18 @@ def _normalize_plugin_name(plugin: str, os_type: Optional[str]) -> str:
     """
     parts = plugin.split(".")
 
-    # Already full format
     if len(parts) == 3:
         return plugin
 
-    # Has module.Class format, add OS prefix
     if len(parts) == 2:
         if os_type:
             return f"{os_type}.{plugin}"
         return plugin
 
-    # Just module name, try to infer class name
     if len(parts) == 1:
         module_name = parts[0].lower()
-        # Common class name patterns
         class_name = parts[0].capitalize()
 
-        # Handle special cases
         class_mappings = {
             "pslist": "PsList",
             "psscan": "PsScan",
@@ -314,7 +297,6 @@ def _normalize_plugin_name(plugin: str, os_type: Optional[str]) -> str:
         if module_name in class_mappings:
             class_name = class_mappings[module_name]
         else:
-            # Dynamic resolution: introspect Vol3 for the real class name
             resolved = _resolve_plugin_class(module_name, os_type)
             if resolved:
                 class_name = resolved

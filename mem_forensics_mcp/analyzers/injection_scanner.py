@@ -22,7 +22,6 @@ from ..core.vol3_runner import VOL3_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
-# Try to import YARA
 try:
     import yara
     YARA_AVAILABLE = True
@@ -104,7 +103,6 @@ SHELLCODE_SIGNATURES = {
     b"\x4d\x5a\x41\x52": "MZ header with 'AR' (possible reflective DLL)",
 }
 
-# Protection flags that indicate injection
 SUSPICIOUS_PROTECTIONS = {
     "PAGE_EXECUTE_READWRITE": "RWX - highly suspicious",
     "PAGE_EXECUTE_WRITECOPY": "Execute + WriteCopy - suspicious",
@@ -160,7 +158,6 @@ def find_injected_code(
             "error": f"Injection scanning only supported for Windows (got: {session.os_type})",
         }
 
-    # Run malfind
     logger.info("Running malfind...")
     try:
         malfind_results = session.run_plugin("windows.malfind.Malfind")
@@ -168,18 +165,15 @@ def find_injected_code(
         logger.error(f"malfind failed: {e}")
         return {"error": f"malfind plugin failed: {e}"}
 
-    # Load YARA rules if scanning enabled
     yara_rules = None
     if yara_scan and YARA_AVAILABLE:
         yara_rules = _load_yara_rules(yara_rules_path)
 
-    # Process malfind results
     injections: list[InjectedRegion] = []
 
     for result in malfind_results:
         result_pid = result.get("PID")
 
-        # Filter by PID if specified
         if pid is not None and result_pid != pid:
             continue
 
@@ -191,10 +185,8 @@ def find_injected_code(
         hexdump = result.get("Hexdump", "")
         disasm = result.get("Disasm", "")
 
-        # Parse hexdump to bytes for analysis
         raw_bytes = _parse_hexdump(hexdump)
 
-        # Calculate size
         try:
             start_int = int(vad_start, 16) if isinstance(vad_start, str) else int(vad_start)
             end_int = int(vad_end, 16) if isinstance(vad_end, str) else int(vad_end)
@@ -213,7 +205,6 @@ def find_injected_code(
             hexdump_preview=hexdump[:200] if hexdump else None,
         )
 
-        # Check protection flags
         prot_str = str(protection)
         if "EXECUTE" in prot_str and "WRITE" in prot_str:
             severity = "HIGH" if "READWRITE" in prot_str else "MEDIUM"
@@ -223,7 +214,6 @@ def find_injected_code(
                 severity=severity,
             ))
 
-        # Check for shellcode signatures
         if raw_bytes:
             for sig_bytes, description in SHELLCODE_SIGNATURES.items():
                 if raw_bytes.startswith(sig_bytes):
@@ -234,7 +224,6 @@ def find_injected_code(
                     ))
                     break
 
-            # Check for MZ header (PE file in memory)
             if raw_bytes[:2] == b"MZ":
                 region.findings.append(InjectionFinding(
                     type="PE_HEADER_DETECTED",
@@ -242,7 +231,6 @@ def find_injected_code(
                     severity="CRITICAL",
                 ))
 
-        # YARA scanning
         if yara_rules and raw_bytes:
             matches = yara_rules.match(data=raw_bytes)
             for match in matches:
@@ -253,7 +241,6 @@ def find_injected_code(
                     yara_rule=match.rule,
                 ))
 
-        # Calculate risk score based on findings
         if region.findings:
             severities = [f.severity for f in region.findings]
             if "CRITICAL" in severities:
@@ -265,7 +252,6 @@ def find_injected_code(
             else:
                 region.risk_score = "LOW"
 
-            # Dump payload if requested
             if dump_payloads and raw_bytes:
                 region.dump_path, region.dump_sha256 = _dump_payload(
                     raw_bytes, result_pid, region.vad_start, dump_dir
@@ -273,11 +259,9 @@ def find_injected_code(
 
             injections.append(region)
 
-    # Sort by risk score
     risk_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     injections.sort(key=lambda i: risk_order.get(i.risk_score, 4))
 
-    # Build summary
     critical_count = sum(1 for i in injections if i.risk_score == "CRITICAL")
     high_count = sum(1 for i in injections if i.risk_score == "HIGH")
     yara_matches = sum(1 for i in injections if any(f.type == "YARA_MATCH" for f in i.findings))
@@ -309,7 +293,6 @@ def find_injected_code(
 
 
 def _parse_hexdump(hexdump: str) -> bytes:
-    """Parse volatility hexdump output to raw bytes."""
     if not hexdump:
         return b""
 
@@ -327,7 +310,6 @@ def _parse_hexdump(hexdump: str) -> bytes:
 
 
 def _load_yara_rules(rules_path: Optional[str] = None) -> Optional["yara.Rules"]:
-    """Load YARA rules from file or bundled rules."""
     if not YARA_AVAILABLE:
         return None
 
@@ -344,7 +326,6 @@ def _load_yara_rules(rules_path: Optional[str] = None) -> Optional["yara.Rules"]
     bundled_path = Path(__file__).parent.parent.parent / "rules" / "memory_yara"
     if bundled_path.exists():
         try:
-            # Compile all .yar files in the directory
             rule_files = list(bundled_path.glob("*.yar"))
             if rule_files:
                 filepaths = {f.stem: str(f) for f in rule_files}
@@ -361,19 +342,11 @@ def _dump_payload(
     vad_start: str,
     dump_dir: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[str]]:
-    """
-    Dump payload bytes to file.
-
-    Returns:
-        Tuple of (dump_path, sha256_hash)
-    """
     if not data:
         return None, None
 
-    # Calculate hash
     sha256 = hashlib.sha256(data).hexdigest()
 
-    # Determine dump directory
     if dump_dir:
         dump_path = Path(dump_dir)
     else:
@@ -381,7 +354,6 @@ def _dump_payload(
 
     dump_path.mkdir(parents=True, exist_ok=True)
 
-    # Create filename
     vad_clean = vad_start.replace("0x", "")
     filename = f"injection_{pid}_{vad_clean}.bin"
     filepath = dump_path / filename

@@ -18,7 +18,6 @@ from .vol3_runner import Vol3Runner, VOL3_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
-# Global session cache
 _sessions: dict[str, "MemorySession"] = {}
 
 
@@ -48,7 +47,6 @@ class MemorySession:
         self._profile: dict[str, Any] = {}
         self._created_at = time.time()
 
-        # Rust engine state
         self._rust_session_id: Optional[str] = None
         self._rust_initialized = False
         self._rust_profile: Optional[dict] = None
@@ -204,7 +202,6 @@ class MemorySession:
             return False
 
     def _ensure_initialized(self) -> None:
-        """Ensure the session is initialized (either engine)."""
         if not self._initialized:
             result = self.initialize()
             if not result.get("ready"):

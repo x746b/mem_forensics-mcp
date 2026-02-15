@@ -81,7 +81,6 @@ def extract_credentials(
     credentials: list[CredentialFinding] = []
     errors: list[str] = []
 
-    # Try hashdump for SAM hashes
     logger.info("Running hashdump...")
     hashdump_out = plugin_runner_run(image_path, "hashdump")
     if "error" in hashdump_out:
@@ -94,11 +93,9 @@ def extract_credentials(
             lm_hash = str(result.get("lmhash", ""))
             nt_hash = str(result.get("nthash", ""))
 
-            # Skip machine accounts unless requested
             if user.endswith("$") and not include_machine_accounts:
                 continue
 
-            # Skip empty/disabled hashes
             if nt_hash in ("", "31d6cfe0d16ae931b73c59d7e0c089c0"):
                 continue
 
@@ -110,7 +107,6 @@ def extract_credentials(
                 detail=f"RID: {rid}",
             ))
 
-    # Try lsadump for LSA secrets
     logger.info("Running lsadump...")
     lsadump_out = plugin_runner_run(image_path, "lsadump")
     if "error" in lsadump_out:
@@ -125,7 +121,6 @@ def extract_credentials(
             if not key or key.startswith("$"):
                 continue
 
-            # Detect secret type
             secret_type = "LSA_SECRET"
             detail = None
 
@@ -152,7 +147,6 @@ def extract_credentials(
                 detail=detail,
             ))
 
-    # Try cachedump for domain cached credentials
     logger.info("Running cachedump...")
     cachedump_out = plugin_runner_run(image_path, "cachedump")
     if "error" in cachedump_out:
@@ -176,7 +170,6 @@ def extract_credentials(
                 detail="Domain cached credential (DCC2)",
             ))
 
-    # Analyze findings
     summary_parts = []
     type_counts: dict[str, int] = {}
     for cred in credentials:
@@ -189,7 +182,6 @@ def extract_credentials(
     if summary_parts:
         summary += f" ({', '.join(summary_parts[:4])})"
 
-    # Risk assessment
     risk_level = "LOW"
     risk_reasons = []
 
@@ -221,7 +213,6 @@ def extract_credentials(
         "errors": errors if errors else None,
     }
 
-    # Add fallback hints when all plugins failed
     if not credentials and errors:
         result["fallback_hint"] = (
             "All credential plugins failed (library API + CLI fallback). "

@@ -64,7 +64,6 @@ def _is_smss_pid_reuse(
         or ""
     ).lower()
 
-    # If parent IS smss.exe, the relationship is genuine — no reuse.
     if parent_name == "smss.exe":
         return False
 
@@ -173,11 +172,9 @@ def hunt_process_anomalies(
             "error": f"Process anomaly detection only supported for Windows (got: {session.os_type})",
         }
 
-    # Get processes from pslist
     logger.info("Running pslist...")
     pslist_procs = session.run_plugin("windows.pslist.PsList")
 
-    # Build process lookup tables
     pid_to_proc: dict[int, dict] = {}
     pid_to_name: dict[int, str] = {}
     name_counts: dict[str, int] = {}
@@ -194,7 +191,6 @@ def hunt_process_anomalies(
     pslist_pids = set(pid_to_proc.keys())
     logger.info(f"Found {len(pslist_pids)} processes in pslist")
 
-    # Get processes from psscan (includes hidden/terminated)
     logger.info("Running psscan...")
     psscan_procs = session.run_plugin("windows.psscan.PsScan")
 
@@ -208,11 +204,9 @@ def hunt_process_anomalies(
 
     logger.info(f"Found {len(psscan_pids)} processes in psscan")
 
-    # Find anomalies
     anomalies: list[ProcessAnomaly] = []
     all_processes: list[dict] = []
 
-    # Check processes in pslist
     for pid, proc in pid_to_proc.items():
         name = proc.get("ImageFileName", "unknown")
         ppid = proc.get("PPID")
@@ -229,7 +223,6 @@ def hunt_process_anomalies(
             cmdline=None,
         )
 
-        # Check for suspicious name
         is_suspicious, reason = is_suspicious_name(name)
         if is_suspicious:
             anomaly.findings.append(ProcessFinding(
@@ -238,7 +231,6 @@ def hunt_process_anomalies(
                 severity="HIGH",
             ))
 
-        # Check parent-child relationship
         if parent_name and parent_name != "unknown":
             is_valid, reason = is_valid_parent(name, parent_name)
             if not is_valid:
@@ -258,7 +250,6 @@ def hunt_process_anomalies(
                         severity="HIGH",
                     ))
 
-        # Check singleton violations
         rule = get_process_rule(name)
         if rule and rule.singleton:
             count = name_counts.get(name.lower(), 0)
@@ -269,7 +260,6 @@ def hunt_process_anomalies(
                     severity="HIGH",
                 ))
 
-        # Check if lsass has children
         if name.lower() == "lsass.exe":
             children = [p for p in pid_to_proc.values() if p.get("PPID") == pid]
             if children:
@@ -280,7 +270,6 @@ def hunt_process_anomalies(
                     severity="CRITICAL",
                 ))
 
-        # Mark LOLBins (informational)
         if is_lolbin(name):
             anomaly.findings.append(ProcessFinding(
                 type="LOLBIN",
@@ -288,7 +277,6 @@ def hunt_process_anomalies(
                 severity="LOW",
             ))
 
-        # Calculate risk score
         if anomaly.findings:
             severities = [f.severity for f in anomaly.findings]
             if "CRITICAL" in severities:
@@ -305,7 +293,6 @@ def hunt_process_anomalies(
         elif include_normal:
             all_processes.append(anomaly.to_dict())
 
-    # Check for hidden processes (in psscan but not pslist)
     hidden_pids = psscan_pids - pslist_pids
     for pid in hidden_pids:
         proc = psscan_by_pid.get(pid, {})
@@ -325,7 +312,6 @@ def hunt_process_anomalies(
         )
 
         if exit_time:
-            # Process terminated - less suspicious
             anomaly.findings.append(ProcessFinding(
                 type="TERMINATED_PROCESS",
                 detail=f"Process terminated at {exit_time}. Found in psscan only.",
@@ -343,11 +329,9 @@ def hunt_process_anomalies(
 
         anomalies.append(anomaly)
 
-    # Sort anomalies by risk score
     risk_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     anomalies.sort(key=lambda a: risk_order.get(a.risk_score, 4))
 
-    # Build summary
     critical_count = sum(1 for a in anomalies if a.risk_score == "CRITICAL")
     high_count = sum(1 for a in anomalies if a.risk_score == "HIGH")
     hidden_count = sum(1 for a in anomalies if any(f.type == "HIDDEN_PROCESS" for f in a.findings))
@@ -413,7 +397,6 @@ def get_process_tree(
     # Get processes
     processes = session.run_plugin("windows.pslist.PsList")
 
-    # Build parent-child relationships
     pid_to_proc: dict[int, dict] = {}
     children: dict[int, list[int]] = {}
 
@@ -447,7 +430,6 @@ def get_process_tree(
             "children": [],
         }
 
-        # Check for suspicious indicators
         if highlight_suspicious:
             name = proc["name"]
             parent_name = pid_to_proc.get(proc.get("ppid"), {}).get("name")
@@ -479,7 +461,6 @@ def get_process_tree(
                 node["suspicious"] = True
                 node["indicators"] = suspicious_indicators
 
-        # Add children
         for child_pid in children.get(pid, []):
             child_node = build_tree(child_pid, depth + 1)
             if child_node:
@@ -487,7 +468,6 @@ def get_process_tree(
 
         return node
 
-    # Build tree(s)
     if root_pid is not None:
         # Single tree from specified root
         tree = build_tree(root_pid)

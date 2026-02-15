@@ -58,14 +58,12 @@ def dump_process(
     if session.os_type != "windows":
         return {"error": f"Process dumping only supported for Windows (got: {session.os_type})"}
 
-    # Setup output directory
     if output_dir:
         dump_path = Path(output_dir)
     else:
         dump_path = Path("/tmp/memory_dumps")
     dump_path.mkdir(parents=True, exist_ok=True)
 
-    # Get process info first
     try:
         pslist_results = session.run_plugin("windows.pslist.PsList")
     except Exception as e:
@@ -92,7 +90,6 @@ def dump_process(
     memory_regions = []
     total_size = 0
 
-    # Get loaded DLLs
     dlls = []
     try:
         dlllist_results = session.run_plugin("windows.dlllist.DllList")
@@ -165,7 +162,6 @@ def dump_dll(
     if not dll_name and not dll_base:
         return {"error": "Must specify either dll_name or dll_base"}
 
-    # Get DLL list for the process
     try:
         dlllist_results = session.run_plugin("windows.dlllist.DllList")
     except Exception as e:
@@ -242,20 +238,17 @@ def dump_vad(
     if not init_result.get("ready"):
         return {"error": "Failed to initialize session"}
 
-    # Setup output directory
     if output_dir:
         dump_path = Path(output_dir)
     else:
         dump_path = Path("/tmp/memory_dumps")
     dump_path.mkdir(parents=True, exist_ok=True)
 
-    # Parse address
     try:
         target_addr = int(vad_address, 16) if vad_address.startswith("0x") else int(vad_address)
     except ValueError:
         return {"error": f"Invalid address format: {vad_address}"}
 
-    # Get VAD info
     try:
         vadinfo_results = session.run_plugin("windows.vadinfo.VadInfo")
     except Exception as e:
@@ -318,36 +311,9 @@ def list_dumpable_files(
     Returns:
         Dict with list of dumpable files
     """
-    # Return warning instead of running heavy plugin
     return {
         "warning": "dumpfiles plugin is memory-intensive and may crash on large dumps",
         "alternative": "Use memory_run_plugin with 'filescan' for file listing",
         "example": "memory_run_plugin(image_path, plugin='filescan')",
         "pid_filter": pid,
-    }
-
-    files = []
-    count = 0
-    for result in results:
-        if count >= 100:  # Limit output
-            break
-        # Filter by PID if specified
-        if pid is not None:
-            result_pid = result.get("PID")
-            if result_pid != pid:
-                continue
-        files.append({
-            "pid": result.get("PID"),
-            "cache_type": str(result.get("Cache", "")),
-            "file_name": str(result.get("FileName", "")),
-            "file_type": str(result.get("FileObject", "")),
-        })
-        count += 1
-
-    return {
-        "image_path": str(session.image_path),
-        "profile": session.profile,
-        "pid_filter": pid,
-        "files_found": len(files),
-        "files": files,
     }

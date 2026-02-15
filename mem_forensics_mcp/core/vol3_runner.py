@@ -39,7 +39,6 @@ if _vol3_external_path:
     else:
         logger.warning(f"VOLATILITY3_PATH set but path not found: {_vol3_path}")
 
-# Try to import Volatility3
 try:
     from volatility3.framework import (
         automagic,
@@ -133,15 +132,12 @@ class Vol3Runner:
 
         logger.info(f"Initializing Volatility3 for: {self.image_path}")
 
-        # Create the context
         self._context = contexts.Context()
 
-        # Set up the file layer configuration
         self._context.config[
             "automagic.LayerStacker.single_location"
         ] = f"file://{self.image_path.absolute()}"
 
-        # Get available automagics
         self._automagics = automagic.available(self._context)
 
         # Detect OS type by trying info plugins (automagics run per-plugin)
@@ -151,7 +147,6 @@ class Vol3Runner:
         return self._profile_info
 
     def _progress_callback(self, progress: float, description: str) -> None:
-        """Progress callback for long-running operations."""
         # Could be used for status updates in the future
         pass
 
@@ -162,7 +157,6 @@ class Vol3Runner:
         Returns:
             Dict with profile information
         """
-        # Try Windows first (most common for DFIR)
         try:
             windows_info = self._try_windows_info()
             if windows_info:
@@ -171,7 +165,6 @@ class Vol3Runner:
         except Exception as e:
             logger.debug(f"Windows detection failed: {e}")
 
-        # Try Linux
         try:
             linux_info = self._try_linux_info()
             if linux_info:
@@ -180,7 +173,6 @@ class Vol3Runner:
         except Exception as e:
             logger.debug(f"Linux detection failed: {e}")
 
-        # Try Mac
         try:
             mac_info = self._try_mac_info()
             if mac_info:
@@ -218,11 +210,9 @@ class Vol3Runner:
             treegrid.populate(visitor)
 
             if result:
-                # Extract build number from Major/Minor (e.g., "15.19041" -> "19041")
                 major_minor = result.get("Major/Minor", "")
                 build = major_minor.split(".")[-1] if "." in major_minor else "unknown"
 
-                # Determine architecture
                 is_64bit = result.get("Is64Bit", "").lower() == "true"
 
                 return {
@@ -298,7 +288,6 @@ class Vol3Runner:
             return None
 
         try:
-            # Build configuration path for this plugin
             plugin_config_path = interfaces.configuration.path_join(
                 self._base_config_path,
                 plugin_class.__name__,
@@ -376,10 +365,8 @@ class Vol3Runner:
         # Run the plugin and convert TreeGrid to dicts
         treegrid = plugin.run()
 
-        # Get column names from the treegrid
         columns = [col.name for col in treegrid.columns]
 
-        # Collect rows using populate()
         rows = []
 
         def visitor(node, accumulator):
@@ -395,7 +382,6 @@ class Vol3Runner:
 
         treegrid.populate(visitor)
 
-        # Yield collected rows
         for row_dict in rows:
             yield row_dict
 
@@ -415,12 +401,10 @@ class Vol3Runner:
             parts = plugin_name.split(".")
 
             if len(parts) == 3:
-                # Format: os.module.ClassName
                 os_name, module_name, class_name = parts
                 module_path = f"volatility3.plugins.{os_name}.{module_name}"
 
             elif len(parts) == 2:
-                # Format: module.ClassName (assume current OS)
                 module_name, class_name = parts
                 if not self._os_type:
                     return None
@@ -429,7 +413,6 @@ class Vol3Runner:
             else:
                 return None
 
-            # Dynamically import the module
             module = importlib.import_module(module_path)
             return getattr(module, class_name, None)
 
@@ -453,39 +436,31 @@ class Vol3Runner:
         if value is None:
             return None
 
-        # Handle Volatility renderers
         if hasattr(value, 'vol'):
-            # This is a Volatility object, try to get its value
             if hasattr(value, '__int__'):
                 return int(value)
             if hasattr(value, '__str__'):
                 return str(value)
 
-        # Handle NotAvailableValue
         type_name = type(value).__name__
         if "NotAvailable" in type_name or "Unreadable" in type_name:
             return None
 
-        # Handle hex addresses
         if hasattr(value, 'vol') and hasattr(value.vol, 'offset'):
             return hex(value.vol.offset)
 
-        # Handle datetime
         if hasattr(value, 'isoformat'):
             return value.isoformat()
 
-        # Handle basic types
         if isinstance(value, (int, float, str, bool)):
             return value
 
-        # Handle bytes
         if isinstance(value, bytes):
             try:
                 return value.decode('utf-8', errors='replace')
             except Exception:
                 return value.hex()
 
-        # Default: convert to string
         try:
             return str(value)
         except Exception:
@@ -569,9 +544,7 @@ def _make_file_handler_class(output_dir: str):
         def close(self):
             if self._file.closed:
                 return
-            # Compute final path
             output_filename = os.path.join(str(out_dir), self.preferred_filename)
-            # Deduplicate if exists
             counter = 1
             base, ext = os.path.splitext(output_filename)
             while os.path.exists(output_filename):
@@ -614,7 +587,6 @@ def run_vol3_cli(
     if not os.path.exists(vol_py):
         raise FileNotFoundError(f"vol.py not found at {vol_py}")
 
-    # Build command
     cmd = ["uv", "run", "--directory", vol3_root, "python", vol_py]
     cmd.extend(["-f", str(image_path)])
     cmd.extend(["-r", "csv"])  # CSV output for easy parsing
@@ -623,7 +595,6 @@ def run_vol3_cli(
         cmd.extend(["-o", str(output_dir)])
     cmd.append(plugin_name)
 
-    # Add plugin kwargs as --key value
     for key, value in kwargs.items():
         cli_key = f"--{key.replace('_', '-')}"
         if isinstance(value, list):
@@ -666,14 +637,12 @@ def run_vol3_cli(
     reader = csv.DictReader(io.StringIO(csv_text))
     rows = []
     for row in reader:
-        # Clean up values
         clean_row = {}
         for k, v in row.items():
             if k is None:
                 continue
             k = k.strip()
             if v and v.strip():
-                # Try to convert numeric values
                 v = v.strip()
                 try:
                     if v.startswith("0x"):
@@ -691,7 +660,6 @@ def run_vol3_cli(
 
 
 def _format_cli_value(value: Any) -> str:
-    """Format a value for vol3 CLI argument."""
     if isinstance(value, int):
         return hex(value)
     return str(value)

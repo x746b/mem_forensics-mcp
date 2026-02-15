@@ -40,14 +40,12 @@ pub struct CmdscanResult {
     pub hits: Vec<CommandHit>,
 }
 
-/// Pre-built Aho-Corasick automaton + pattern metadata for one encoding.
 struct AcScanner {
     automaton: AhoCorasick,
     /// Map from AC pattern index → index into COMMAND_PATTERNS.
     pattern_map: Vec<usize>,
 }
 
-/// Build the ASCII Aho-Corasick scanner (case-insensitive).
 fn build_ascii_scanner() -> AcScanner {
     let patterns = command_patterns::COMMAND_PATTERNS;
     let needles: Vec<&[u8]> = patterns.iter().map(|p| p.needle.as_bytes()).collect();
@@ -62,7 +60,6 @@ fn build_ascii_scanner() -> AcScanner {
     AcScanner { automaton, pattern_map }
 }
 
-/// Build the UTF-16LE Aho-Corasick scanner (exact match on lowercased UTF-16LE needles).
 fn build_utf16le_scanner() -> AcScanner {
     let patterns = command_patterns::COMMAND_PATTERNS;
     let mut needles: Vec<Vec<u8>> = Vec::with_capacity(patterns.len());

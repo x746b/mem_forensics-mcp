@@ -87,7 +87,6 @@ def full_triage(
     }
     errors: list[str] = []
 
-    # Track analysis results for correlation
     hidden_pids: set[int] = set()
     injection_pids: set[int] = set()
     c2_pids: set[int] = set()
@@ -150,11 +149,9 @@ def full_triage(
                 process_name = inj.get("process_name", "unknown")
                 inj_findings = inj.get("findings", [])
 
-                # Extract finding types and details
                 finding_types = [f.get("type", "") for f in inj_findings]
                 finding_details = [f.get("detail", "") for f in inj_findings]
 
-                # Determine severity based on findings
                 severity = "HIGH"
                 yara_rules = [f.get("yara_rule") for f in inj_findings if f.get("yara_rule")]
                 if yara_rules or any("YARA" in t for t in finding_types):
@@ -190,7 +187,6 @@ def full_triage(
                 injection_pids.add(pid)
                 iocs["pid"].append(str(pid))
 
-                # Add filenames if available
                 if process_name and process_name != "unknown":
                     iocs["filename"].append(process_name)
 
@@ -213,7 +209,6 @@ def full_triage(
                 remote_port = conn.get("remote_port", "")
                 conn_findings = conn.get("findings", [])
 
-                # Extract finding types for analysis
                 finding_types = [f.get("type", "") for f in conn_findings]
                 finding_details = [f.get("detail", "") for f in conn_findings]
 
@@ -267,7 +262,6 @@ def full_triage(
                 pid = cmd.get("pid")
                 process_name = cmd.get("process_name", "unknown")
 
-                # Get highest severity from findings
                 severity = "MEDIUM"
                 categories = []
                 for f in cmd_findings:
@@ -330,7 +324,6 @@ def full_triage(
             logger.warning(f"Credential extraction failed: {e}")
             errors.append(f"credentials: {e}")
 
-    # Correlate findings
     correlated_pids = hidden_pids & injection_pids
     if correlated_pids:
         findings.append(Finding(
@@ -361,11 +354,9 @@ def full_triage(
             ],
         ))
 
-    # Sort findings by severity
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     findings.sort(key=lambda f: severity_order.get(f.severity, 4))
 
-    # Determine overall risk level
     risk_level = "LOW"
     if any(f.severity == "CRITICAL" for f in findings):
         risk_level = "CRITICAL"
@@ -374,7 +365,6 @@ def full_triage(
     elif any(f.severity == "MEDIUM" for f in findings):
         risk_level = "MEDIUM"
 
-    # Build summary
     severity_counts = {}
     for f in findings:
         severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
@@ -383,11 +373,9 @@ def full_triage(
     for f in findings:
         category_counts[f.category] = category_counts.get(f.category, 0) + 1
 
-    # Deduplicate IOCs
     for ioc_type in iocs:
         iocs[ioc_type] = list(set(iocs[ioc_type]))
 
-    # Build recommended actions
     actions = []
     if risk_level == "CRITICAL":
         actions.append("IMMEDIATE: Consider system isolation")

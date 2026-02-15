@@ -246,7 +246,6 @@ pub fn run(
             }
         };
 
-        // Scan for all three pool tags
         for (tag, conn_type) in &[
             (POOL_TAG_TCPL, ConnectionType::TcpListener),
             (POOL_TAG_TCPE, ConnectionType::TcpEndpoint),
@@ -406,26 +405,21 @@ fn parse_tcp_listener(
 ) -> Result<Option<NetworkConnection>, String> {
     let ptr_size = offsets.pointer_size;
 
-    // Read port (big-endian u16)
     let port = read_u16_be(image, addr + offsets.tcpl_port as u64)?;
     if port == 0 {
         return Ok(None);
     }
 
-    // Read Owner pointer (kernel VA)
     let owner_va = read_ptr(image, addr + offsets.tcpl_owner as u64, ptr_size)?;
     if !is_kernel_address(owner_va, ptr_size) {
         return Ok(None);
     }
 
-    // Resolve PID from Owner via kernel VM
     let (pid, process_name) = resolve_owner(owner_va, kernel_symbols, kernel_vm);
 
-    // Resolve address family via InetAF pointer
     let inetaf_va = read_ptr(image, addr + offsets.tcpl_inetaf as u64, ptr_size)?;
     let af_name = resolve_address_family(inetaf_va, offsets, kernel_vm);
 
-    // Create time
     let create_time = read_filetime(image, addr + offsets.tcpl_create_time as u64);
 
     let protocol = match af_name.as_deref() {
@@ -457,14 +451,12 @@ fn parse_tcp_endpoint(
 ) -> Result<Option<NetworkConnection>, String> {
     let ptr_size = offsets.pointer_size;
 
-    // Read state
     let state_val = read_u32_le(image, addr + offsets.tcpe_state as u64)?;
     let state_name = tcp_state_name(state_val);
     if state_name == "UNKNOWN" && state_val > 13 {
         return Ok(None);
     }
 
-    // Read ports (big-endian u16)
     let local_port = read_u16_be(image, addr + offsets.tcpe_local_port as u64)?;
     let remote_port = read_u16_be(image, addr + offsets.tcpe_remote_port as u64)?;
 
@@ -472,7 +464,6 @@ fn parse_tcp_endpoint(
         return Ok(None);
     }
 
-    // Read Owner pointer
     let owner_va = read_ptr(image, addr + offsets.tcpe_owner as u64, ptr_size)?;
     if !is_kernel_address(owner_va, ptr_size) {
         return Ok(None);
@@ -480,7 +471,6 @@ fn parse_tcp_endpoint(
 
     let (pid, process_name) = resolve_owner(owner_va, kernel_symbols, kernel_vm);
 
-    // Resolve addresses via kernel VM
     let inetaf_va = read_ptr(image, addr + offsets.tcpe_inetaf as u64, ptr_size)?;
     let af_name = resolve_address_family(inetaf_va, offsets, kernel_vm);
     let addr_info_va = read_ptr(image, addr + offsets.tcpe_addr_info as u64, ptr_size)?;
@@ -518,13 +508,11 @@ fn parse_udp_endpoint(
 ) -> Result<Option<NetworkConnection>, String> {
     let ptr_size = offsets.pointer_size;
 
-    // Read port (big-endian u16)
     let port = read_u16_be(image, addr + offsets.udpa_port as u64)?;
     if port == 0 {
         return Ok(None);
     }
 
-    // Read Owner pointer
     let owner_va = read_ptr(image, addr + offsets.udpa_owner as u64, ptr_size)?;
     if !is_kernel_address(owner_va, ptr_size) {
         return Ok(None);
@@ -532,7 +520,6 @@ fn parse_udp_endpoint(
 
     let (pid, process_name) = resolve_owner(owner_va, kernel_symbols, kernel_vm);
 
-    // Resolve address family
     let inetaf_va = read_ptr(image, addr + offsets.udpa_inetaf as u64, ptr_size)?;
     let af_name = resolve_address_family(inetaf_va, offsets, kernel_vm);
 

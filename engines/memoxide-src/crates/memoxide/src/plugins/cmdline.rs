@@ -56,13 +56,11 @@ pub fn run_with_head(
     pid_filter: Option<&[u64]>,
     ps_head_override: Option<u64>,
 ) -> Result<Vec<CmdlineInfo>, String> {
-    // Get process list using pslist
     let processes = super::pslist::run_with_head(symbols, kernel_vm, kernel_base, ps_head_override)?;
 
     let mut results = Vec::new();
 
     for proc in &processes {
-        // Filter by PID if requested
         if let Some(pids) = pid_filter {
             if !pids.contains(&proc.pid) {
                 continue;
@@ -104,14 +102,12 @@ fn extract_cmdline(
     physical: &Arc<dyn crate::memory::traits::MemoryLayer>,
     proc: &ProcessInfo,
 ) -> Result<CmdlineInfo, String> {
-    // Read _EPROCESS at the process's virtual address
     let reader = StructReader::new(symbols, kernel_vm, proc.offset, "_EPROCESS")
         .map_err(|e| format!("StructReader: {}", e))?;
 
     // Get the process's DTB from _EPROCESS.Pcb.DirectoryTableBase
     let dtb = read_process_dtb(symbols, kernel_vm, proc.offset)?;
 
-    // Get PEB pointer (this is a user-space VA)
     let peb_addr = reader
         .read_pointer("Peb")
         .map_err(|e| format!("read Peb: {}", e))?;
@@ -125,11 +121,9 @@ fn extract_cmdline(
         });
     }
 
-    // Create per-process virtual memory
     let proc_vm = VirtualMemory::with_dtb(physical.clone(), dtb)
         .map_err(|e| format!("create process VM: {}", e))?;
 
-    // Read _PEB.ProcessParameters pointer
     let peb_reader = StructReader::new(symbols, &proc_vm, peb_addr, "_PEB")
         .map_err(|e| format!("PEB reader: {}", e))?;
 
@@ -146,17 +140,14 @@ fn extract_cmdline(
         });
     }
 
-    // Read _RTL_USER_PROCESS_PARAMETERS
     let params_reader =
         StructReader::new(symbols, &proc_vm, params_addr, "_RTL_USER_PROCESS_PARAMETERS")
             .map_err(|e| format!("params reader: {}", e))?;
 
-    // Read CommandLine (_UNICODE_STRING)
     let cmdline = params_reader
         .read_unicode_string("CommandLine")
         .unwrap_or_default();
 
-    // Read ImagePathName (_UNICODE_STRING)
     let image_path = params_reader
         .read_unicode_string("ImagePathName")
         .ok()
@@ -254,10 +245,8 @@ fn extract_cmdline_physical(
     physical: &Arc<dyn crate::memory::traits::MemoryLayer>,
     proc: &ProcessInfo,
 ) -> Result<CmdlineInfo, String> {
-    // Read DTB from physical _EPROCESS
     let dtb = read_process_dtb(symbols, image, proc.offset)?;
 
-    // Read PEB pointer from physical memory
     let peb_offset = symbols
         .field_offset("_EPROCESS", "Peb")
         .ok_or("field _EPROCESS.Peb not found")?;
@@ -284,11 +273,9 @@ fn extract_cmdline_physical(
         });
     }
 
-    // Create per-process virtual memory
     let proc_vm = VirtualMemory::with_dtb(physical.clone(), dtb)
         .map_err(|e| format!("create process VM: {}", e))?;
 
-    // Read command line from PEB
     let peb_reader = StructReader::new(symbols, &proc_vm, peb_addr, "_PEB")
         .map_err(|e| format!("PEB reader: {}", e))?;
 

@@ -76,7 +76,6 @@ def check_api_key() -> str:
 
 
 def _rate_limit() -> None:
-    """Enforce rate limiting between requests."""
     global _last_request_time
     elapsed = time.time() - _last_request_time
     if elapsed < MIN_REQUEST_INTERVAL:
@@ -86,7 +85,6 @@ def _rate_limit() -> None:
 
 
 def _get_cached(key: str) -> Optional[dict]:
-    """Get cached result if not expired."""
     if key in _cache:
         result, timestamp = _cache[key]
         if datetime.now() - timestamp < CACHE_TTL:
@@ -103,12 +101,10 @@ def _get_cached(key: str) -> Optional[dict]:
 
 
 def _set_cached(key: str, result: dict) -> None:
-    """Cache result."""
     _cache[key] = (dict(result), datetime.now())
 
 
 def _normalize_hash(file_hash: str) -> tuple[str, str]:
-    """Normalize hash and determine type."""
     file_hash = file_hash.lower().strip()
     hash_types = {32: "md5", 40: "sha1", 64: "sha256"}
     hash_type = hash_types.get(len(file_hash), "unknown")
@@ -156,7 +152,6 @@ def lookup_hash(file_hash: str) -> dict[str, Any]:
             "error": f"Invalid hash length ({len(file_hash)}). Expected 32 (MD5), 40 (SHA1), or 64 (SHA256).",
         }
 
-    # Check cache
     cache_key = f"hash:{file_hash}"
     if cached := _get_cached(cache_key):
         return cached
@@ -179,7 +174,6 @@ def lookup_hash(file_hash: str) -> dict[str, Any]:
             return result
         raise RuntimeError(f"VirusTotal API error: {e}")
 
-    # Parse response
     stats = getattr(file_obj, "last_analysis_stats", {})
     malicious = stats.get("malicious", 0)
     suspicious = stats.get("suspicious", 0)
@@ -187,7 +181,6 @@ def lookup_hash(file_hash: str) -> dict[str, Any]:
     undetected = stats.get("undetected", 0)
     total = malicious + suspicious + harmless + undetected
 
-    # Determine verdict
     if malicious >= 5:
         verdict = "malicious"
     elif malicious > 0 or suspicious >= 3:
@@ -197,7 +190,6 @@ def lookup_hash(file_hash: str) -> dict[str, Any]:
     else:
         verdict = "unknown"
 
-    # Extract threat names from detections
     threat_names = []
     if hasattr(file_obj, "last_analysis_results"):
         for av_name, av_result in file_obj.last_analysis_results.items():
@@ -205,10 +197,8 @@ def lookup_hash(file_hash: str) -> dict[str, Any]:
                 if av_result.get("category") == "malicious" and av_result.get("result"):
                     threat_names.append(av_result["result"])
 
-    # Get most common threat names
     popular_threats = [name for name, _ in Counter(threat_names).most_common(5)]
 
-    # Format timestamps
     first_submission = None
     if hasattr(file_obj, "first_submission_date"):
         ts = file_obj.first_submission_date
@@ -282,7 +272,6 @@ def lookup_ip(ip_address: str) -> dict[str, Any]:
 
     ip_address = ip_address.strip()
 
-    # Check cache
     cache_key = f"ip:{ip_address}"
     if cached := _get_cached(cache_key):
         return cached
@@ -308,7 +297,6 @@ def lookup_ip(ip_address: str) -> dict[str, Any]:
     harmless = stats.get("harmless", 0)
     undetected = stats.get("undetected", 0)
 
-    # Determine verdict
     if malicious >= 3:
         verdict = "malicious"
     elif malicious > 0 or suspicious >= 2:
@@ -316,7 +304,6 @@ def lookup_ip(ip_address: str) -> dict[str, Any]:
     else:
         verdict = "clean"
 
-    # Format timestamp
     last_analysis = None
     if hasattr(ip_obj, "last_analysis_date"):
         ts = ip_obj.last_analysis_date
@@ -376,7 +363,6 @@ def lookup_domain(domain: str) -> dict[str, Any]:
 
     domain = domain.strip().lower()
 
-    # Check cache
     cache_key = f"domain:{domain}"
     if cached := _get_cached(cache_key):
         return cached
@@ -402,7 +388,6 @@ def lookup_domain(domain: str) -> dict[str, Any]:
     harmless = stats.get("harmless", 0)
     undetected = stats.get("undetected", 0)
 
-    # Determine verdict
     if malicious >= 3:
         verdict = "malicious"
     elif malicious > 0 or suspicious >= 2:
@@ -410,7 +395,6 @@ def lookup_domain(domain: str) -> dict[str, Any]:
     else:
         verdict = "clean"
 
-    # Format timestamps
     creation_date = None
     if hasattr(domain_obj, "creation_date"):
         ts = domain_obj.creation_date
@@ -427,7 +411,6 @@ def lookup_domain(domain: str) -> dict[str, Any]:
         elif isinstance(ts, datetime):
             last_analysis = ts.isoformat()
 
-    # Safely get whois data
     whois_data = None
     if hasattr(domain_obj, "whois") and domain_obj.whois:
         whois_data = domain_obj.whois[:500]
@@ -470,7 +453,6 @@ def lookup_file(file_path: str | Path) -> dict[str, Any]:
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    # Calculate all hashes
     md5 = hashlib.md5()
     sha1 = hashlib.sha1()
     sha256 = hashlib.sha256()
@@ -487,7 +469,6 @@ def lookup_file(file_path: str | Path) -> dict[str, Any]:
         "sha256": sha256.hexdigest(),
     }
 
-    # Look up using SHA256 (most reliable)
     result = lookup_hash(local_hashes["sha256"])
     result["file_path"] = str(file_path)
     result["local_hashes"] = local_hashes
@@ -497,14 +478,12 @@ def lookup_file(file_path: str | Path) -> dict[str, Any]:
 
 
 def clear_cache() -> int:
-    """Clear the cache. Returns number of items cleared."""
     count = len(_cache)
     _cache.clear()
     return count
 
 
 def get_cache_stats() -> dict[str, Any]:
-    """Get cache statistics."""
     now = datetime.now()
     valid = sum(1 for _, (_, ts) in _cache.items() if now - ts < CACHE_TTL)
     expired = len(_cache) - valid

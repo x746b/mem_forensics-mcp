@@ -161,7 +161,6 @@ def get_command_history(
 
     commands: list[CommandEntry] = []
 
-    # Get cmdline for all processes
     logger.info("Running cmdline...")
     try:
         cmdlines = session.run_plugin("windows.cmdline.CmdLine")
@@ -181,7 +180,6 @@ def get_command_history(
                 source="cmdline",
             )
 
-            # Analyze command
             _analyze_command(entry)
 
             if entry.findings or include_benign:
@@ -190,7 +188,6 @@ def get_command_history(
     except Exception as e:
         logger.warning(f"cmdline failed: {e}")
 
-    # Try cmdscan for command history
     logger.info("Running cmdscan...")
     try:
         cmdscan_results = session.run_plugin("windows.cmdscan.CmdScan")
@@ -218,7 +215,6 @@ def get_command_history(
     except Exception as e:
         logger.warning(f"cmdscan failed: {e}")
 
-    # Try consoles for console buffers
     logger.info("Running consoles...")
     try:
         consoles_results = session.run_plugin("windows.consoles.Consoles")
@@ -227,7 +223,6 @@ def get_command_history(
             if pid is not None and cmd_pid != pid:
                 continue
 
-            # Consoles may have multiple fields with command data
             for field in ["Command", "CommandHistory", "Screen"]:
                 cmd_text = result.get(field, "")
                 if cmd_text:
@@ -246,7 +241,6 @@ def get_command_history(
     except Exception as e:
         logger.warning(f"consoles failed: {e}")
 
-    # Deduplicate commands
     seen = set()
     unique_commands = []
     for cmd in commands:
@@ -255,7 +249,6 @@ def get_command_history(
             seen.add(key)
             unique_commands.append(cmd)
 
-    # Sort by severity
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     unique_commands.sort(
         key=lambda c: min(
@@ -264,7 +257,6 @@ def get_command_history(
         )
     )
 
-    # Build summary
     finding_counts: dict[str, int] = {}
     for cmd in unique_commands:
         for f in cmd.findings:
@@ -289,12 +281,10 @@ def get_command_history(
 
 
 def _analyze_command(entry: CommandEntry) -> None:
-    """Analyze a command for suspicious patterns."""
     cmd_lower = entry.command.lower()
 
     for pattern, finding_type, description in SUSPICIOUS_PATTERNS:
         if re.search(pattern, cmd_lower, re.IGNORECASE):
-            # Determine severity based on finding type
             severity = "MEDIUM"
             if finding_type in ("CREDENTIAL_ACCESS", "PRIVILEGE_ESCALATION"):
                 severity = "CRITICAL"

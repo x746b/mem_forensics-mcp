@@ -70,14 +70,10 @@ pub struct MmapFileLayer {
     state: Option<Arc<RwLock<MmapState>>>,
 }
 
-// ---------------------------------------------------------------------------
-// Always-available helpers
-// ---------------------------------------------------------------------------
 impl MmapFileLayer {
     /// Parse a file:// URL to a path.
     fn parse_location(location: &str) -> Vol3Result<PathBuf> {
         let path_str = if location.starts_with("file://") {
-            // Handle file:// URLs
             let url_path = &location[7..];
             // On Windows, handle file:///C:/path format
             if url_path.starts_with('/')
@@ -98,7 +94,6 @@ impl MmapFileLayer {
         Ok(PathBuf::from(decoded))
     }
 
-    /// Create the memory map for the file.
     fn create_mmap(path: &PathBuf, writable: bool) -> Vol3Result<MmapState> {
         let file = if writable {
             OpenOptions::new().read(true).write(true).open(path)?
@@ -133,7 +128,6 @@ impl MmapFileLayer {
         }
     }
 
-    /// Get the state, returning an error if destroyed.
     fn get_state(&self) -> Vol3Result<&Arc<RwLock<MmapState>>> {
         self.state
             .as_ref()
@@ -141,9 +135,6 @@ impl MmapFileLayer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 impl MmapFileLayer {
     /// Open a memory-mapped file layer.
     ///
@@ -185,7 +176,6 @@ impl MmapFileLayer {
         let data = state_guard.as_slice();
         let size = state_guard.size;
 
-        // Check if the read is valid
         if offset > size || (offset == size && length > 0) {
             if pad {
                 return Ok(vec![0u8; length]);
@@ -201,16 +191,13 @@ impl MmapFileLayer {
         let available = (size - offset) as usize;
 
         if length <= available {
-            // Full read available
             Ok(data[start..start + length].to_vec())
         } else if pad {
-            // Partial read with padding
             let mut result = Vec::with_capacity(length);
             result.extend_from_slice(&data[start..]);
             result.resize(length, 0);
             Ok(result)
         } else {
-            // Partial read without padding - error
             Err(Vol3Error::invalid_address(
                 &self.name,
                 offset + available as u64,
@@ -232,7 +219,6 @@ impl MmapFileLayer {
         let state_guard = state.read();
         let size = state_guard.size;
 
-        // Check bounds
         let max_addr = if size > 0 {
             size - 1
         } else {
@@ -271,16 +257,12 @@ impl MmapFileLayer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MemoryLayer trait implementation
-// ---------------------------------------------------------------------------
 impl MemoryLayer for MmapFileLayer {
     fn read(&self, offset: u64, length: usize) -> Vol3Result<Vec<u8>> {
         self.read_bytes(offset, length, false)
     }
 
     fn is_valid(&self, offset: u64, length: u64) -> bool {
-        // Delegate to the inherent method
         MmapFileLayer::is_valid(self, offset, length)
     }
 

@@ -55,17 +55,14 @@ from .extractors import (
     list_dumpable_files,
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Create MCP server
 server = Server("mem-forensics-mcp")
 
-# Rust engine client (singleton)
 _memoxide: MemoxideClient | None = None
 
 # Plugins supported by the Rust engine
@@ -87,13 +84,11 @@ def _get_memoxide() -> MemoxideClient:
 
 
 def truncate_response(data: dict[str, Any], max_size: int = MAX_RESPONSE_SIZE) -> dict[str, Any]:
-    """Truncate response if it exceeds max size."""
     json_str = json.dumps(data, indent=2, default=str)
 
     if len(json_str) <= max_size:
         return data
 
-    # Progressively truncate lists until under limit
     for keep_count in [500, 200, 100, 50, 20]:
         for key in list(data.keys()):
             value = data[key]
@@ -119,7 +114,6 @@ def _coerce_pid(value: Any) -> int | None:
 
 
 def _apply_filter(data: dict[str, Any], filter_str: str) -> dict[str, Any]:
-    """Apply case-insensitive substring filter to list values in response."""
     filter_lower = filter_str.lower()
     for key, value in list(data.items()):
         if isinstance(value, list):
@@ -136,7 +130,6 @@ def _apply_filter(data: dict[str, Any], filter_str: str) -> dict[str, Any]:
 
 
 def json_response(data: dict[str, Any]) -> list[TextContent]:
-    """Format data as JSON response."""
     data = truncate_response(data)
     return [TextContent(type="text", text=json.dumps(data, indent=2, default=str))]
 
@@ -567,7 +560,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if params:
                 for k, v in params.items():
                     vol3_kwargs[k] = v
-            # Extract dump-dir for file output handling
             dump_dir = vol3_kwargs.pop("dump-dir", vol3_kwargs.pop("dump_dir", None))
             result = await asyncio.to_thread(
                 vol3_run_plugin,
@@ -602,8 +594,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ))
 
         elif name == "memory_hunt_process_anomalies":
-            # This uses Vol3 pslist+psscan internally, but could be enhanced
-            # to use Rust data when available
             result = await asyncio.to_thread(
                 hunt_process_anomalies,
                 image_path=arguments["image_path"],

@@ -109,10 +109,8 @@ fn extract_dlls(
     let reader = StructReader::new(symbols, kernel_vm, proc.offset, "_EPROCESS")
         .map_err(|e| format!("StructReader: {}", e))?;
 
-    // Read process DTB
     let dtb = super::cmdline::read_process_dtb(symbols, kernel_vm, proc.offset)?;
 
-    // Read PEB pointer
     let peb_addr = reader
         .read_pointer("Peb")
         .map_err(|e| format!("read Peb: {}", e))?;
@@ -125,11 +123,9 @@ fn extract_dlls(
         });
     }
 
-    // Create per-process VM
     let proc_vm = VirtualMemory::with_dtb(physical.clone(), dtb)
         .map_err(|e| format!("create process VM: {}", e))?;
 
-    // Read _PEB.Ldr pointer
     let peb_reader = StructReader::new(symbols, &proc_vm, peb_addr, "_PEB")
         .map_err(|e| format!("PEB reader: {}", e))?;
 
@@ -218,18 +214,11 @@ fn read_ldr_entry(
     let reader = StructReader::new(symbols, memory, addr, "_LDR_DATA_TABLE_ENTRY")
         .map_err(|e| format!("LDR entry reader: {}", e))?;
 
-    // DllBase
     let base = reader.read_pointer("DllBase").unwrap_or(0);
-
-    // SizeOfImage
     let size = reader.read_u32("SizeOfImage").unwrap_or(0) as u64;
-
-    // BaseDllName (UNICODE_STRING — just the filename)
     let name = reader
         .read_unicode_string("BaseDllName")
         .unwrap_or_default();
-
-    // FullDllName (UNICODE_STRING — full path)
     let path = reader
         .read_unicode_string("FullDllName")
         .ok()

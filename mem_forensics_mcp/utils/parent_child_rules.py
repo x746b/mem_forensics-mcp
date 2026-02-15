@@ -175,7 +175,6 @@ WINDOWS_PROCESS_RULES: dict[str, ProcessRule] = {
     ),
 }
 
-# Processes that should NEVER have network connections
 PROCESSES_NO_NETWORK = {
     "notepad.exe",
     "calc.exe",
@@ -187,7 +186,6 @@ PROCESSES_NO_NETWORK = {
     "osk.exe",  # On-screen keyboard
 }
 
-# Processes commonly abused for living-off-the-land
 LOLBIN_PROCESSES = {
     "powershell.exe",
     "pwsh.exe",  # PowerShell Core
@@ -206,7 +204,6 @@ LOLBIN_PROCESSES = {
     "wmic.exe",
 }
 
-# Known malware process names (exact match, case-insensitive)
 KNOWN_MALWARE_NAMES = {
     "mimikatz.exe",
     "procdump.exe",  # Can be legitimate, but suspicious
@@ -252,7 +249,6 @@ def is_valid_parent(child_name: str, parent_name: str) -> tuple[bool, str]:
     if rule is None:
         return True, "Unknown process - no rule defined"
 
-    # Check if parent is in valid list
     valid_parents_lower = [p.lower() for p in rule.valid_parents]
     if parent_lower in valid_parents_lower:
         return True, "Valid parent-child relationship"
@@ -272,7 +268,6 @@ def is_suspicious_name(process_name: str) -> tuple[bool, str]:
     """
     name_lower = process_name.lower()
 
-    # Known malware
     if name_lower in KNOWN_MALWARE_NAMES:
         return True, f"Known malware tool: {process_name}"
 

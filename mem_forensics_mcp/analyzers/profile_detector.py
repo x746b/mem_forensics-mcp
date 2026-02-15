@@ -71,7 +71,6 @@ def analyze_image_profile(
     """
     image_path = Path(image_path)
 
-    # Validate file exists
     if not image_path.exists():
         return {
             "image_path": str(image_path),
@@ -79,7 +78,6 @@ def analyze_image_profile(
             "error": f"Memory image not found: {image_path}",
         }
 
-    # Check file size
     try:
         file_size = image_path.stat().st_size
         file_size_gb = round(file_size / (1024 ** 3), 2)
@@ -90,11 +88,9 @@ def analyze_image_profile(
             "error": f"Cannot read file: {e}",
         }
 
-    # Warn about small files (likely not valid memory dumps)
     if file_size < 10 * 1024 * 1024:  # Less than 10MB
         logger.warning(f"File is very small ({file_size} bytes), may not be a valid memory dump")
 
-    # Check Volatility availability
     if not VOL3_AVAILABLE:
         return {
             "image_path": str(image_path.absolute()),
@@ -105,7 +101,6 @@ def analyze_image_profile(
             "hint": "Memory analysis requires the volatility3 library",
         }
 
-    # Get or create session
     session = get_session(image_path)
     if session is None:
         return {
@@ -116,10 +111,8 @@ def analyze_image_profile(
             "error": "Failed to create analysis session",
         }
 
-    # Initialize the session
     result = session.initialize()
 
-    # Enhance the result with analysis availability
     if result.get("ready"):
         result["available_analyses"] = _get_available_analyses(session.os_type)
         result["next_steps"] = _get_next_steps(session.os_type)
@@ -128,7 +121,6 @@ def analyze_image_profile(
 
 
 def _get_available_analyses(os_type: Optional[str]) -> list[str]:
-    """Get list of available analyses for the OS type."""
     if os_type == "windows":
         return [
             "process_anomalies",
@@ -149,7 +141,6 @@ def _get_available_analyses(os_type: Optional[str]) -> list[str]:
 
 
 def _get_next_steps(os_type: Optional[str]) -> list[str]:
-    """Get recommended next steps based on OS type."""
     if os_type == "windows":
         return [
             "Run memory_full_triage() for automated investigation",
@@ -169,12 +160,6 @@ def _get_next_steps(os_type: Optional[str]) -> list[str]:
 
 
 def get_supported_formats() -> dict[str, Any]:
-    """
-    Get information about supported memory dump formats.
-
-    Returns:
-        Dict with format information
-    """
     return {
         "supported_formats": [
             {

@@ -90,10 +90,8 @@ SUSPICIOUS_PORTS = {
     31337: "Elite/Back Orifice port",
 }
 
-# Ports that are suspicious when non-browser processes use them
 WEB_PORTS = {80, 443, 8080, 8443}
 
-# Processes expected to make web connections
 WEB_PROCESSES = {
     "chrome.exe",
     "firefox.exe",
@@ -112,7 +110,6 @@ WEB_PROCESSES = {
     "runtimebroker.exe",
 }
 
-# Private IP ranges (for filtering)
 PRIVATE_RANGES = [
     ("10.", "10."),
     ("172.16.", "172.31."),
@@ -124,7 +121,6 @@ PRIVATE_RANGES = [
 
 
 def is_private_ip(ip: str) -> bool:
-    """Check if an IP address is in a private range."""
     if not ip:
         return True
     for prefix, _ in PRIVATE_RANGES:
@@ -177,7 +173,6 @@ def find_c2_connections(
             "error": f"Network analysis only supported for Windows (got: {session.os_type})",
         }
 
-    # Get network connections
     logger.info("Running netscan...")
     try:
         connections = session.get_network_connections()
@@ -185,7 +180,6 @@ def find_c2_connections(
         logger.error(f"netscan failed: {e}")
         return {"error": f"netscan plugin failed: {e}"}
 
-    # Analyze connections
     suspicious: list[SuspiciousConnection] = []
     all_connections: list[dict] = []
     unique_remote_ips: set[str] = set()
@@ -201,11 +195,9 @@ def find_c2_connections(
         proto = str(conn.get("Proto", "TCP"))
         create_time = conn.get("Created")
 
-        # Skip listening if not requested
         if not include_listening and "LISTEN" in state.upper():
             continue
 
-        # Track unique remote IPs
         if foreign_addr and not is_private_ip(foreign_addr):
             unique_remote_ips.add(foreign_addr)
 
@@ -223,7 +215,6 @@ def find_c2_connections(
 
         process_lower = str(owner).lower()
 
-        # Check 1: Process should not make network connections
         if process_lower in PROCESSES_NO_NETWORK:
             conn_obj.findings.append(NetworkFinding(
                 type="UNEXPECTED_NETWORK",
@@ -231,7 +222,6 @@ def find_c2_connections(
                 severity="HIGH",
             ))
 
-        # Check 2: Suspicious remote port
         if foreign_port in SUSPICIOUS_PORTS:
             conn_obj.findings.append(NetworkFinding(
                 type="SUSPICIOUS_PORT",
@@ -239,7 +229,6 @@ def find_c2_connections(
                 severity="HIGH",
             ))
 
-        # Check 3: Non-web process making web connections
         if foreign_port in WEB_PORTS and process_lower not in WEB_PROCESSES:
             if not is_private_ip(foreign_addr):
                 conn_obj.findings.append(NetworkFinding(
@@ -248,7 +237,6 @@ def find_c2_connections(
                     severity="MEDIUM",
                 ))
 
-        # Check 4: LOLBin with network activity
         if is_lolbin(owner):
             conn_obj.findings.append(NetworkFinding(
                 type="LOLBIN_NETWORK",
@@ -256,7 +244,6 @@ def find_c2_connections(
                 severity="MEDIUM",
             ))
 
-        # Check 5: Suspicious listening port
         if "LISTEN" in state.upper() and local_port in SUSPICIOUS_PORTS:
             conn_obj.findings.append(NetworkFinding(
                 type="SUSPICIOUS_LISTENER",
@@ -264,7 +251,6 @@ def find_c2_connections(
                 severity="HIGH",
             ))
 
-        # Calculate risk score
         if conn_obj.findings:
             severities = [f.severity for f in conn_obj.findings]
             if "CRITICAL" in severities:
@@ -279,11 +265,9 @@ def find_c2_connections(
         elif include_legitimate:
             all_connections.append(conn_obj.to_dict())
 
-    # Sort by risk score
     risk_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     suspicious.sort(key=lambda c: risk_order.get(c.risk_score, 4))
 
-    # Build summary
     high_count = sum(1 for c in suspicious if c.risk_score in ("CRITICAL", "HIGH"))
     unexpected_net = sum(1 for c in suspicious if any(f.type == "UNEXPECTED_NETWORK" for f in c.findings))
     lolbin_net = sum(1 for c in suspicious if any(f.type == "LOLBIN_NETWORK" for f in c.findings))

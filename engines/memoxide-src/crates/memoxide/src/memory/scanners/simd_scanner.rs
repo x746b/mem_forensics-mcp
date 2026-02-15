@@ -8,10 +8,6 @@ use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use memchr::memmem::Finder;
 use rayon::prelude::*;
 
-// =============================================================================
-// SimdScanner
-// =============================================================================
-
 /// SIMD-accelerated byte pattern scanner.
 ///
 /// # Example (Rust)
@@ -22,19 +18,15 @@ use rayon::prelude::*;
 /// ```
 #[derive(Clone)]
 pub struct SimdScanner {
-    /// The pattern to search for.
     needle: Vec<u8>,
-    /// Whether this scanner is thread-safe.
     #[allow(dead_code)]
     thread_safe: bool,
     /// Chunk size for scanning (matches Volatility3 default).
     chunk_size: usize,
-    /// Overlap size for scanning.
     #[allow(dead_code)]
     overlap: usize,
 }
 
-/// Pure-Rust API.
 impl SimdScanner {
     /// Create a new SimdScanner.
     ///
@@ -84,17 +76,12 @@ impl SimdScanner {
     }
 }
 
-// =============================================================================
-// SimdMultiScanner
-// =============================================================================
-
 /// SIMD-accelerated multi-pattern scanner.
 ///
 /// Searches for multiple patterns simultaneously using sequential search
 /// with SIMD acceleration per pattern.
 #[derive(Clone)]
 pub struct SimdMultiScanner {
-    /// The patterns to search for.
     needles: Vec<Vec<u8>>,
     #[allow(dead_code)]
     thread_safe: bool,
@@ -103,7 +90,6 @@ pub struct SimdMultiScanner {
     overlap: usize,
 }
 
-/// Pure-Rust API.
 impl SimdMultiScanner {
     /// Create a new SimdMultiScanner.
     ///
@@ -158,10 +144,6 @@ impl SimdMultiScanner {
     }
 }
 
-// =============================================================================
-// AhoCorasickScanner
-// =============================================================================
-
 /// Aho-Corasick multi-pattern scanner.
 ///
 /// Uses the Aho-Corasick algorithm for true O(n) multi-pattern matching.
@@ -176,7 +158,6 @@ impl SimdMultiScanner {
 /// let results = scanner.scan_multi(data, 0);
 /// ```
 pub struct AhoCorasickScanner {
-    /// The patterns to search for.
     needles: Vec<Vec<u8>>,
     /// Precompiled Aho-Corasick automaton.
     automaton: AhoCorasick,
@@ -198,7 +179,6 @@ impl std::fmt::Debug for AhoCorasickScanner {
     }
 }
 
-/// Pure-Rust API.
 impl AhoCorasickScanner {
     /// Create a new AhoCorasickScanner.
     ///
@@ -283,10 +263,6 @@ impl AhoCorasickScanner {
     }
 }
 
-// =============================================================================
-// Parallel Scanners (Rayon-based)
-// =============================================================================
-
 /// Parallel SIMD scanner using Rayon.
 ///
 /// Distributes scanning work across all CPU cores for maximum throughput.
@@ -300,7 +276,6 @@ pub struct ParallelScanner {
     parallel_chunk_size: usize,
 }
 
-/// Pure-Rust API.
 impl ParallelScanner {
     /// Create a new ParallelScanner.
     ///
@@ -365,10 +340,6 @@ impl ParallelScanner {
     }
 }
 
-// =============================================================================
-// ParallelMultiScanner
-// =============================================================================
-
 /// Parallel multi-pattern scanner using Rayon.
 ///
 /// Combines SIMD per-pattern search with parallel chunk processing.
@@ -381,7 +352,6 @@ pub struct ParallelMultiScanner {
     parallel_chunk_size: usize,
 }
 
-/// Pure-Rust API.
 impl ParallelMultiScanner {
     /// Create a new ParallelMultiScanner.
     pub fn new_scanner(needles: Vec<Vec<u8>>, chunk_size: usize, parallel_chunk_size: usize) -> Self {
@@ -450,10 +420,6 @@ impl ParallelMultiScanner {
     }
 }
 
-// =============================================================================
-// ParallelAhoCorasick
-// =============================================================================
-
 /// Parallel Aho-Corasick scanner using Rayon.
 ///
 /// Combines O(n) Aho-Corasick algorithm with parallel chunk processing.
@@ -467,7 +433,6 @@ pub struct ParallelAhoCorasick {
     parallel_chunk_size: usize,
 }
 
-/// Pure-Rust API.
 impl ParallelAhoCorasick {
     /// Create a new ParallelAhoCorasick scanner.
     pub fn new_scanner(
@@ -545,10 +510,6 @@ impl ParallelAhoCorasick {
         rayon::current_num_threads()
     }
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {

@@ -57,7 +57,6 @@ pub enum Vol3Error {
 }
 
 impl Vol3Error {
-    /// Create an InvalidAddress error.
     pub fn invalid_address(layer_name: impl Into<String>, addr: u64, msg: impl Into<String>) -> Self {
         Vol3Error::InvalidAddress {
             layer_name: layer_name.into(),
@@ -66,7 +65,6 @@ impl Vol3Error {
         }
     }
 
-    /// Create a PagedInvalidAddress error.
     pub fn paged_invalid_address(
         layer_name: impl Into<String>,
         addr: u64,
@@ -83,7 +81,6 @@ impl Vol3Error {
         }
     }
 
-    /// Create a SwappedInvalidAddress error.
     pub fn swapped_invalid_address(
         layer_name: impl Into<String>,
         addr: u64,
@@ -104,7 +101,6 @@ impl Vol3Error {
         }
     }
 
-    /// Create a LayerDestroyed error.
     pub fn layer_destroyed(name: impl Into<String>) -> Self {
         Vol3Error::LayerDestroyed(name.into())
     }

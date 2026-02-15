@@ -118,7 +118,6 @@ SYSTEM_PROCESSES = {
     },
 }
 
-# Suspicious parent-child combinations
 SUSPICIOUS_ANCESTRY = {
     "svchost.exe": {
         "invalid_parents": [
@@ -140,7 +139,6 @@ SUSPICIOUS_ANCESTRY = {
     },
 }
 
-# Processes that should NOT make network connections
 NO_NETWORK_PROCESSES = [
     "notepad.exe",
     "calc.exe",
@@ -153,7 +151,6 @@ NO_NETWORK_PROCESSES = [
     "osk.exe",
 ]
 
-# Suspicious ports for C2 detection
 SUSPICIOUS_PORTS = [
     4444,   # Meterpreter default
     5555,   # Common RAT
@@ -166,7 +163,6 @@ SUSPICIOUS_PORTS = [
     9050,   # Tor SOCKS
 ]
 
-# Common C2 ports that need process context
 C2_CANDIDATE_PORTS = [
     80,     # HTTP - suspicious if not browser
     443,    # HTTPS - suspicious if not browser
