@@ -18,7 +18,7 @@ LLM <-> [mem-forensics-mcp (Python)] <-> memoxide (Rust child, stdio MCP)
 
 | Tier | Engine | Speed | Coverage |
 |------|--------|-------|----------|
-| **Tier 1** | Rust (memoxide) | Fast | pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, hashdump, readraw, rsds |
+| **Tier 1** | Rust (memoxide) | Fast | pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, readraw, rsds |
 | **Tier 2** | Python analyzers | Medium | Process anomalies, C2 detection, credentials, YARA, VT integration |
 | **Tier 3** | Volatility3 | Slower | Any vol3 plugin (filescan, handles, svcscan, driverscan, ...) |
 
@@ -64,12 +64,7 @@ cargo build --release
 
 ### Configure Volatility3 (optional)
 
-If Vol3 is installed at `/opt/volatility3` it's auto-detected. Otherwise set the env var:
-
-```bash
-# Point to repo root or site-packages directory
-export VOLATILITY3_PATH="/path/to/volatility3"
-```
+If Vol3 is installed at `/opt/volatility3` it's auto-detected. Otherwise: `export VOLATILITY3_PATH="/path/to/volatility3"`
 
 ### Verify
 
@@ -101,21 +96,14 @@ claude mcp add mem-forensics-mcp \
 
 ## Quick Start
 
-### 1. Initialize Memory Image
-
-```
+```python
+# 1. Initialize
 memory_analyze_image(image_path="/evidence/memory.raw")
-```
 
-### 2. Run Full Triage
-
-```
+# 2. Full triage
 memory_full_triage(image_path="/evidence/memory.raw")
-```
 
-### 3. Drill Down
-
-```
+# 3. Drill down
 memory_run_plugin(image_path="/evidence/memory.raw", plugin="malfind", pid=1234)
 ```
 
@@ -177,12 +165,7 @@ Running `memory_full_triage` on a Windows 10 memory dump (Win10 19041, x64, VMwa
 }
 ```
 
-**Tier routing in action:**
-- Rust (Tier 1) collected process list, psscan, cmdlines, netscan, malfind, cmdscan data in ~5s (4GB image)
-- Rust command analysis: two-layer approach — structured PEB cmdline matching (high confidence) + Aho-Corasick raw memory scan (medium confidence, 45 patterns)
-- Python (Tier 2) correlated findings: parent-child validation, C2 detection, injection analysis, risk scoring
-
-**Key findings from the triage:**
+**Key findings:**
 
 | Category | Detail |
 |----------|--------|
@@ -199,75 +182,15 @@ memory_run_plugin(image_path="memory.raw", plugin="filescan", filter="notepad")
 # Returns: 2 of 7612 results matched (server-side grep before truncation)
 ```
 
-**Targeted file extraction with CLI fallback:**
-```
-memory_run_plugin(image_path="memory.raw", plugin="dumpfiles",
-                  params={"virtaddr": [0xa7850eb98de0], "dump_dir": "/tmp/out"})
-# Returns: 1 result — Notepad.lnk extracted to /tmp/out/
-# (auto-routes to vol3 CLI for ListRequirement params)
-```
-
----
-
-## Why Multi-Tier? Real-World Testing Observations
-
-Tested on several different memory dumps (Win7 SP1 through Win11, x64, both VirtualBox and VMware images).
-
-### Tier 1 (Rust) — Speed Where It Matters
-
-The Rust engine handles the plugins that get called most frequently during investigation. The `search` plugin is the standout:
-
-- **Full-dump byte search** scans 500MB-1GB dumps in seconds, finding ASCII and UTF-16LE strings anywhere in physical memory
-- A single `search` call can locate email content, browser JSON blobs, embedded URLs, and credential fragments buried deep in physical memory — data that would otherwise require chaining multiple Vol3 plugins (pslist, memdump, strings) to extract
-- Process listing (`pslist`), command lines (`cmdline`), and network connections (`netscan`) return instantly, enabling rapid triage of 50-100+ process dumps
-
-The speed advantage compounds during `full_triage`, where Tier 1 collects pslist + psscan + cmdline + netscan + malfind + cmdscan data in ~5s on a 4GB dump (using Aho-Corasick multi-pattern scanning for cmdscan), compared to ~30s+ for Vol3 equivalents.
-
-### Tier 2 (Python Analyzers) — Intelligence Layer
-
-Raw plugin output is data. Tier 2 turns it into findings:
-
-- **Process anomaly detection** cross-references pslist vs psscan (DKOM detection) and validates parent-child relationships against Windows rules — reduces 50+ processes to a handful of actionable anomalies
-- **PID reuse handling** distinguishes terminated parent processes from truly suspicious orphans, eliminating false positives that plague naive parent-child checks
-- **Full triage orchestrator** correlates across all data sources: processes with RWX regions + external network connections = "active implant" correlation. This multi-source correlation elevates raw data into risk scores and IOC lists
-- **C2 detection** enriches netscan results with process context — svchost connecting to external IPs on unusual ports gets flagged, while the same connection from a browser does not
-
-### Tier 3 (Vol3) — Coverage for Everything Else
-
-Vol3 handles the long tail of forensic needs:
-
-- `filescan` + `dumpfiles` for file extraction from memory cache (documents, archives, browser databases)
-- `handles`, `svcscan`, `driverscan` for deep-dive investigation
-- Server-side `filter` parameter greps results before returning — e.g. `filescan` with `filter="keyword"` returns matching entries from thousands of cached files
-- CLI fallback for `ListRequirement` params (e.g., `dumpfiles` with `physaddr` lists) that Vol3's Python API mishandles
-
-### Tier Routing Is Invisible
-
-The key design principle: the LLM (or analyst) never needs to know which tier handles a request. `memory_run_plugin(plugin="pslist")` routes to Rust; `memory_run_plugin(plugin="filescan")` routes to Vol3. If Rust fails, Vol3 takes over. The routing is an implementation detail, not a user concern.
-
 ---
 
 ## Related Projects
 
-| Project | Focus |
-|---------|-------|
-| **winforensics-mcp** | Windows disk forensics - EVTX, Registry, MFT, Prefetch, YARA, PCAP |
-| **mac_forensics-mcp** | macOS DFIR - Unified Logs, FSEvents, Spotlight, Plists |
+- **winforensics-mcp** — Windows disk forensics (EVTX, Registry, MFT, Prefetch, YARA, PCAP)
+- **mac_forensics-mcp** — macOS DFIR (Unified Logs, FSEvents, Spotlight, Plists)
 
 ---
 
-## License
-
-MIT License
-
----
-
-## Author
-
-__xtk__
-
-Built for the DFIR community. No Windows required >)
-
----
+MIT License | __xtk__ | Built for the DFIR community. No Windows required >)
 <!-- mcp-name: io.github.x746b/mem-forensics-mcp -->
 
