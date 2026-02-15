@@ -183,18 +183,24 @@ def run_plugin(
 
         return result
 
-    except ValueError as e:
-        return {
-            "error": f"Plugin not found: {plugin_name}",
+    except Exception as e:
+        # Library API failed — try CLI fallback before giving up
+        logger.info(f"Library API failed for {plugin_name}: {e}, trying CLI fallback")
+        cli_result = _run_via_cli(image_path, plugin_name, pid, dump_dir, session, vol3_kwargs)
+        if "error" not in cli_result:
+            return cli_result
+        # Both paths failed — include suggestions
+        logger.warning(f"Both library API and CLI failed for {plugin_name}")
+        suggestions = _suggest_plugins(plugin, session.os_type if session else None)
+        result = {
+            "error": f"Plugin failed: {plugin_name}",
             "detail": str(e),
+            "cli_error": cli_result.get("error"),
             "hint": "Use memory_list_plugins to see available plugins",
         }
-    except Exception as e:
-        logger.exception(f"Plugin {plugin_name} failed")
-        return {
-            "error": f"Plugin execution failed: {e}",
-            "plugin": plugin_name,
-        }
+        if suggestions:
+            result["suggestions"] = suggestions
+        return result
 
 
 def _run_via_cli(
@@ -305,10 +311,72 @@ def _normalize_plugin_name(plugin: str, os_type: Optional[str]) -> str:
             "verinfo": "VerInfo",
         }
 
-        class_name = class_mappings.get(module_name, class_name)
+        if module_name in class_mappings:
+            class_name = class_mappings[module_name]
+        else:
+            # Dynamic resolution: introspect Vol3 for the real class name
+            resolved = _resolve_plugin_class(module_name, os_type)
+            if resolved:
+                class_name = resolved
 
         if os_type:
             return f"{os_type}.{module_name}.{class_name}"
         return f"{module_name}.{class_name}"
 
     return plugin
+
+
+def _resolve_plugin_class(module_name: str, os_type: Optional[str]) -> Optional[str]:
+    """Resolve plugin class name by introspecting Vol3 modules.
+
+    Returns the actual class name with correct casing, or None if not found.
+    """
+    if not os_type:
+        return None
+
+    try:
+        import importlib
+        mod = importlib.import_module(f"volatility3.plugins.{os_type}.{module_name}")
+        for name in dir(mod):
+            obj = getattr(mod, name)
+            if (isinstance(obj, type)
+                    and hasattr(obj, 'run')
+                    and hasattr(obj, '_required_framework_version')):
+                return name
+    except (ImportError, Exception):
+        pass
+
+    return None
+
+
+def _suggest_plugins(query: str, os_type: Optional[str]) -> list[str]:
+    """Find plugins whose names contain the query substring."""
+    if not os_type:
+        return []
+    try:
+        result = list_available_plugins("")  # needs image_path but we just need the plugin list
+    except Exception:
+        pass
+
+    # Fall back to direct introspection
+    try:
+        import importlib
+        import pkgutil
+        plugins_module = importlib.import_module(f"volatility3.plugins.{os_type}")
+        matches = []
+        query_lower = query.lower()
+        for _importer, modname, _ispkg in pkgutil.iter_modules(plugins_module.__path__):
+            if query_lower in modname.lower():
+                try:
+                    submod = importlib.import_module(f"volatility3.plugins.{os_type}.{modname}")
+                    for name in dir(submod):
+                        obj = getattr(submod, name)
+                        if (isinstance(obj, type)
+                                and hasattr(obj, 'run')
+                                and hasattr(obj, '_required_framework_version')):
+                            matches.append(f"{os_type}.{modname}.{name}")
+                except Exception:
+                    matches.append(f"{os_type}.{modname}.*")
+        return matches[:5]
+    except Exception:
+        return []

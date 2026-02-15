@@ -111,6 +111,13 @@ def truncate_response(data: dict[str, Any], max_size: int = MAX_RESPONSE_SIZE) -
     return data
 
 
+def _coerce_pid(value: Any) -> int | None:
+    """Coerce PID to int — MCP transport may deliver integers as strings."""
+    if value is None:
+        return None
+    return int(value)
+
+
 def _apply_filter(data: dict[str, Any], filter_str: str) -> dict[str, Any]:
     """Apply case-insensitive substring filter to list values in response."""
     filter_lower = filter_str.lower()
@@ -327,7 +334,14 @@ async def list_tools() -> list[Tool]:
     # Raw Plugin Access (Tier 1 + Tier 3)
     tools.append(Tool(
         name="memory_run_plugin",
-        description="Run a forensics plugin. Supported Rust plugins (fast): pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, readraw, rsds. Any other name runs via Vol3. Use 'filter' to grep results server-side (avoids truncation).",
+        description=(
+            "Run a forensics plugin. "
+            "Tier 1 (Rust, fast): pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, readraw, rsds — use short names. "
+            "Tier 3 (Vol3): any other plugin — short names auto-resolve (e.g. 'filescan', 'handles', 'envars'). "
+            "If a short name fails, use full Vol3 path: 'windows.category.PluginName' (e.g. 'windows.mftscan.MFTScan'). "
+            "Use 'filter' param to grep results server-side (avoids truncation). "
+            "For search: use params={\"pattern\": \"text\", \"encoding\": \"ascii|utf16le|hex\", \"limit\": N, \"context\": N}."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -473,7 +487,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return json_response(result)
 
             # Tier 2: Fall back to Vol3
-            result = analyze_image_profile(image_path=image_path)
+            result = await asyncio.to_thread(analyze_image_profile, image_path=image_path)
             if result.get("ready"):
                 result["engine"] = "vol3"
             return json_response(result)
@@ -507,7 +521,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "memory_run_plugin":
             image_path = arguments["image_path"]
             plugin = arguments["plugin"]
-            pid = arguments.get("pid")
+            pid = _coerce_pid(arguments.get("pid"))
             params = arguments.get("params")
             result_filter = arguments.get("filter")
 
@@ -547,14 +561,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         "hint": "Ensure image is initialized with memory_analyze_image first",
                     })
 
-            # Tier 3: Vol3 fallback
+            # Tier 3: Vol3 fallback (run in thread to avoid blocking event loop
+            # and starving the Rust engine's async reader)
             vol3_kwargs = {}
             if params:
                 for k, v in params.items():
                     vol3_kwargs[k] = v
             # Extract dump-dir for file output handling
             dump_dir = vol3_kwargs.pop("dump-dir", vol3_kwargs.pop("dump_dir", None))
-            result = vol3_run_plugin(
+            result = await asyncio.to_thread(
+                vol3_run_plugin,
                 image_path=image_path,
                 plugin=plugin,
                 pid=pid,
@@ -569,7 +585,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "memory_list_plugins":
             rust_plugins = sorted(RUST_PLUGINS)
-            vol3_result = list_available_plugins(image_path=arguments["image_path"])
+            vol3_result = await asyncio.to_thread(list_available_plugins, image_path=arguments["image_path"])
 
             return json_response({
                 "rust_plugins": rust_plugins,
@@ -588,14 +604,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "memory_hunt_process_anomalies":
             # This uses Vol3 pslist+psscan internally, but could be enhanced
             # to use Rust data when available
-            result = hunt_process_anomalies(
+            result = await asyncio.to_thread(
+                hunt_process_anomalies,
                 image_path=arguments["image_path"],
                 include_normal=arguments.get("include_normal", False),
             )
             return json_response(result)
 
         elif name == "memory_get_process_tree":
-            result = get_process_tree(
+            result = await asyncio.to_thread(
+                get_process_tree,
                 image_path=arguments["image_path"],
                 root_pid=arguments.get("root_pid"),
                 highlight_suspicious=arguments.get("highlight_suspicious", True),
@@ -603,7 +621,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return json_response(result)
 
         elif name == "memory_find_injected_code":
-            result = find_injected_code(
+            result = await asyncio.to_thread(
+                find_injected_code,
                 image_path=arguments["image_path"],
                 pid=arguments.get("pid"),
                 yara_scan=arguments.get("yara_scan", True),
@@ -612,7 +631,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return json_response(result)
 
         elif name == "memory_find_c2_connections":
-            result = find_c2_connections(
+            result = await asyncio.to_thread(
+                find_c2_connections,
                 image_path=arguments["image_path"],
                 include_legitimate=arguments.get("include_legitimate", False),
                 include_listening=arguments.get("include_listening", False),
@@ -620,7 +640,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return json_response(result)
 
         elif name == "memory_get_command_history":
-            result = get_command_history(
+            result = await asyncio.to_thread(
+                get_command_history,
                 image_path=arguments["image_path"],
                 pid=arguments.get("pid"),
                 include_benign=arguments.get("include_benign", False),
@@ -628,7 +649,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return json_response(result)
 
         elif name == "memory_extract_credentials":
-            result = extract_credentials(
+            result = await asyncio.to_thread(
+                extract_credentials,
                 image_path=arguments["image_path"],
                 include_machine_accounts=arguments.get("include_machine_accounts", False),
             )
@@ -637,24 +659,27 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # === Extraction Tools ===
 
         elif name == "memory_dump_process":
-            result = dump_process(
+            result = await asyncio.to_thread(
+                dump_process,
                 image_path=arguments["image_path"],
-                pid=arguments["pid"],
+                pid=_coerce_pid(arguments["pid"]),
                 output_dir=arguments.get("output_dir"),
             )
             return json_response(result)
 
         elif name == "memory_dump_vad":
-            result = dump_vad(
+            result = await asyncio.to_thread(
+                dump_vad,
                 image_path=arguments["image_path"],
-                pid=arguments["pid"],
+                pid=_coerce_pid(arguments["pid"]),
                 vad_address=arguments["vad_address"],
                 output_dir=arguments.get("output_dir"),
             )
             return json_response(result)
 
         elif name == "memory_list_dumpable_files":
-            result = list_dumpable_files(
+            result = await asyncio.to_thread(
+                list_dumpable_files,
                 image_path=arguments["image_path"],
                 pid=arguments.get("pid"),
             )
@@ -738,7 +763,7 @@ async def _run_full_triage(image_path: str, quick_scan: bool = False) -> dict[st
             # Enrich with Vol3-only data (credentials)
             if not quick_scan:
                 try:
-                    cred_result = extract_credentials(image_path)
+                    cred_result = await asyncio.to_thread(extract_credentials, image_path)
                     if "error" not in cred_result and cred_result.get("credentials_found", 0) > 0:
                         rust_triage["credentials"] = cred_result
                 except Exception as e:
@@ -749,7 +774,7 @@ async def _run_full_triage(image_path: str, quick_scan: bool = False) -> dict[st
 
     # Step 3: Fall back to pure Vol3 triage
     if VOL3_AVAILABLE:
-        result = full_triage(image_path=image_path, quick_scan=quick_scan)
+        result = await asyncio.to_thread(full_triage, image_path=image_path, quick_scan=quick_scan)
         result["engine"] = "vol3"
         return result
 

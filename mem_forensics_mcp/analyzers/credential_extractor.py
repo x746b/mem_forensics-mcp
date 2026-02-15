@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from ..core.session import get_session
 from ..core.vol3_runner import VOL3_AVAILABLE
+from ..core.plugin_runner import run_plugin as plugin_runner_run
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +83,12 @@ def extract_credentials(
 
     # Try hashdump for SAM hashes
     logger.info("Running hashdump...")
-    try:
-        hashdump_results = session.run_plugin("windows.hashdump.Hashdump")
-        for result in hashdump_results:
+    hashdump_out = plugin_runner_run(image_path, "hashdump")
+    if "error" in hashdump_out:
+        logger.warning(f"hashdump failed: {hashdump_out['error']}")
+        errors.append(f"hashdump: {hashdump_out['error']}")
+    else:
+        for result in hashdump_out.get("results", []):
             user = str(result.get("User", ""))
             rid = result.get("rid", "")
             lm_hash = str(result.get("lmhash", ""))
@@ -106,15 +110,14 @@ def extract_credentials(
                 detail=f"RID: {rid}",
             ))
 
-    except Exception as e:
-        logger.warning(f"hashdump failed: {e}")
-        errors.append(f"hashdump: {e}")
-
     # Try lsadump for LSA secrets
     logger.info("Running lsadump...")
-    try:
-        lsadump_results = session.run_plugin("windows.lsadump.Lsadump")
-        for result in lsadump_results:
+    lsadump_out = plugin_runner_run(image_path, "lsadump")
+    if "error" in lsadump_out:
+        logger.warning(f"lsadump failed: {lsadump_out['error']}")
+        errors.append(f"lsadump: {lsadump_out['error']}")
+    else:
+        for result in lsadump_out.get("results", []):
             key = str(result.get("Key", ""))
             secret = str(result.get("Secret", ""))
             hex_data = str(result.get("Hex", ""))
@@ -149,15 +152,14 @@ def extract_credentials(
                 detail=detail,
             ))
 
-    except Exception as e:
-        logger.warning(f"lsadump failed: {e}")
-        errors.append(f"lsadump: {e}")
-
     # Try cachedump for domain cached credentials
     logger.info("Running cachedump...")
-    try:
-        cachedump_results = session.run_plugin("windows.cachedump.Cachedump")
-        for result in cachedump_results:
+    cachedump_out = plugin_runner_run(image_path, "cachedump")
+    if "error" in cachedump_out:
+        logger.warning(f"cachedump failed: {cachedump_out['error']}")
+        errors.append(f"cachedump: {cachedump_out['error']}")
+    else:
+        for result in cachedump_out.get("results", []):
             user = str(result.get("UserName", result.get("User", "")))
             domain = str(result.get("Domain", result.get("DomainName", "")))
             hash_val = str(result.get("Hash", result.get("hash", "")))
@@ -173,10 +175,6 @@ def extract_credentials(
                 domain=domain,
                 detail="Domain cached credential (DCC2)",
             ))
-
-    except Exception as e:
-        logger.warning(f"cachedump failed: {e}")
-        errors.append(f"cachedump: {e}")
 
     # Analyze findings
     summary_parts = []
@@ -211,7 +209,7 @@ def extract_credentials(
         risk_level = max(risk_level, "MEDIUM", key=lambda x: ["LOW", "MEDIUM", "HIGH", "CRITICAL"].index(x))
         risk_reasons.append("Service account credentials found")
 
-    return {
+    result = {
         "image_path": str(session.image_path),
         "profile": session.profile,
         "credentials_found": len(credentials),
@@ -222,3 +220,15 @@ def extract_credentials(
         "summary": summary,
         "errors": errors if errors else None,
     }
+
+    # Add fallback hints when all plugins failed
+    if not credentials and errors:
+        result["fallback_hint"] = (
+            "All credential plugins failed (library API + CLI fallback). "
+            "The Vol3 hashdump/lsadump/cachedump plugins may not be available. "
+            "Try: memory_run_plugin(plugin='hashdump') to see detailed error, "
+            "or use memory_run_plugin(plugin='hivelist') + memory_run_plugin(plugin='printkey') "
+            "to manually inspect registry hives."
+        )
+
+    return result

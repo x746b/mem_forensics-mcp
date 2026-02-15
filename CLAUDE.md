@@ -85,6 +85,31 @@ hunt_ioc("abc123...", artifacts_dir="/evidence/C")
 - notepad.exe/calc.exe with network -> **Suspicious**
 - Regular interval connections -> **Beaconing**
 
+## Plugin Naming
+
+| Tier | How to call | Example |
+|------|-------------|---------|
+| 1 (Rust) | Short name | `memory_run_plugin(plugin="pslist")` |
+| 3 (Vol3) | Short name (auto-resolved) | `memory_run_plugin(plugin="filescan")` |
+| 3 (Vol3) | Full path (when auto-resolve fails) | `memory_run_plugin(plugin="windows.mftscan.MFTScan")` |
+
+Short names are auto-resolved to full Vol3 paths (e.g. `filescan` → `windows.filescan.FileScan`). If a short name fails, use the full `os.category.ClassName` format — class names are case-sensitive.
+
+## Fallback Strategy
+
+If a Tier 2 analyzer fails (e.g. `memory_extract_credentials`), try the underlying Vol3 plugin directly:
+- **Credentials**: `memory_run_plugin(plugin="hashdump")`, `memory_run_plugin(plugin="lsadump")`
+- **Process dump**: `memory_run_plugin(plugin="memmap", pid=X)`, `memory_dump_vad`
+- **File extraction**: `memory_run_plugin(plugin="dumpfiles", pid=X)`
+
+## Search Parameters
+
+`memory_run_plugin(plugin="search", params={...})`
+- `pattern` (required): search string
+- `encoding`: `ascii` (default), `utf16le`, `hex`
+- `limit`: max results (default 20 — raise for broad searches)
+- `context`: bytes of surrounding data per match (default 64)
+
 ## Tips
 
 1. **Always initialize first** - `memory_analyze_image` creates the session
@@ -92,3 +117,5 @@ hunt_ioc("abc123...", artifacts_dir="/evidence/C")
 3. **Filter by PID** - When investigating specific process, use pid parameter
 4. **Rust plugins are fast** - pslist, psscan, malfind, netscan run natively
 5. **Vol3 for everything else** - filescan, handles, svcscan, etc. via Vol3
+6. **Use `filter` param** - Server-side filtering on large result sets avoids truncation
+7. **Fallback on failure** - If a Tier 2 tool fails, try the underlying plugin via `memory_run_plugin`

@@ -421,7 +421,10 @@ impl MemoxideServer {
                     .as_ref()
                     .and_then(|p| p.get("pattern"))
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| McpError::invalid_params("'pattern' parameter is required", None))?
+                    .ok_or_else(|| McpError::invalid_params(
+                        "'pattern' is required in params dict. Usage: params={\"pattern\": \"text\", \"encoding\": \"ascii|utf16le|hex\", \"limit\": 100, \"context\": 64}. Do NOT use extra_args.",
+                        None,
+                    ))?
                     .to_string();
 
                 let encoding = req.params
@@ -459,10 +462,10 @@ impl MemoxideServer {
 
                 let limit = req.params
                     .as_ref()
-                    .and_then(|p| p.get("limit"))
+                    .and_then(|p| p.get("limit").or_else(|| p.get("max_results")))
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize)
-                    .unwrap_or(20);
+                    .unwrap_or(100);
 
                 let result = memsearch::run(
                     &session.image,

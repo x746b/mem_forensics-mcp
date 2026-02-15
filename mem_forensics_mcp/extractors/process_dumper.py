@@ -127,7 +127,7 @@ def dump_process(
         "dlls": dlls[:20],  # First 20 DLLs
         "files_associated": dumped_files[:10],
         "output_dir": str(dump_path),
-        "note": "Use windows.dumpfiles plugin via memory_run_plugin for actual file extraction",
+        "note": "Use memory_run_plugin(plugin='memmap', pid=<PID>) or memory_dump_vad for memory content extraction",
     }
 
 
