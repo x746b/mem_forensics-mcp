@@ -25,7 +25,7 @@ from .analyzers import (
     analyze_image_profile,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __all__ = [
     "MemorySession",
     "get_session",

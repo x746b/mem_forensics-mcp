@@ -18,7 +18,7 @@ LLM <-> [mem-forensics-mcp (Python)] <-> memoxide (Rust child, stdio MCP)
 
 | Tier | Engine | Speed | Coverage |
 |------|--------|-------|----------|
-| **Tier 1** | Rust (memoxide) | Fast | pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, readraw, rsds |
+| **Tier 1** | Rust (memoxide) | Fast | pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, hashdump, readraw, rsds |
 | **Tier 2** | Python analyzers | Medium | Process anomalies, C2 detection, credentials, YARA, VT integration |
 | **Tier 3** | Volatility3 | Slower | Any vol3 plugin (filescan, handles, svcscan, driverscan, ...) |
 
@@ -172,13 +172,14 @@ Running `memory_full_triage` on a Windows 10 memory dump (Win10 19041, x64, VMwa
 {
   "threat_level": "critical",
   "risk_score": 100,
-  "summary": "Processes: 115 found. Process Anomalies: 4 info-level. Network: 4 flagged of 79 connections. Commands: 52 suspicious fragments. Injected Code: 12 RWX regions. Correlations: 2 critical.",
+  "summary": "Processes: 115 found. Process Anomalies: 4 info-level. Network: 4 flagged of 79 connections. Commands: 56 memory fragments. Injected Code: 12 RWX regions. Correlations: 2 critical.",
   "engine": "rust+python"
 }
 ```
 
 **Tier routing in action:**
-- Rust (Tier 1) collected process list, psscan, cmdlines, netscan, malfind, cmdscan in ~2s
+- Rust (Tier 1) collected process list, psscan, cmdlines, netscan, malfind, cmdscan data in ~5s (4GB image)
+- Rust command analysis: two-layer approach — structured PEB cmdline matching (high confidence) + Aho-Corasick raw memory scan (medium confidence, 45 patterns)
 - Python (Tier 2) correlated findings: parent-child validation, C2 detection, injection analysis, risk scoring
 
 **Key findings from the triage:**
@@ -220,7 +221,7 @@ The Rust engine handles the plugins that get called most frequently during inves
 - A single `search` call can locate email content, browser JSON blobs, embedded URLs, and credential fragments buried deep in physical memory — data that would otherwise require chaining multiple Vol3 plugins (pslist, memdump, strings) to extract
 - Process listing (`pslist`), command lines (`cmdline`), and network connections (`netscan`) return instantly, enabling rapid triage of 50-100+ process dumps
 
-The speed advantage compounds during `full_triage`, where Tier 1 collects pslist + psscan + cmdline + netscan + malfind + cmdscan data in ~2s, compared to ~30s+ for Vol3 equivalents.
+The speed advantage compounds during `full_triage`, where Tier 1 collects pslist + psscan + cmdline + netscan + malfind + cmdscan data in ~5s on a 4GB dump (using Aho-Corasick multi-pattern scanning for cmdscan), compared to ~30s+ for Vol3 equivalents.
 
 ### Tier 2 (Python Analyzers) — Intelligence Layer
 

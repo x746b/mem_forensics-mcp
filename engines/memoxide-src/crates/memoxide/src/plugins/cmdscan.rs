@@ -3,10 +3,15 @@
 //! This is not a full Volatility-style console structure parser yet.
 //! Instead, it scans physical memory for suspicious command substrings in
 //! both ASCII and UTF-16LE, and returns hits with offsets + small context.
+//!
+//! Uses Aho-Corasick for multi-pattern matching in a single pass per encoding,
+//! rather than per-pattern memchr scans.
 
 use crate::memory::image::MemoryImage;
 use crate::rules::command_patterns::{self, CommandPattern, CommandSeverity};
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 /// Encoding of the hit.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -35,10 +40,68 @@ pub struct CmdscanResult {
     pub hits: Vec<CommandHit>,
 }
 
+/// Pre-built Aho-Corasick automaton + pattern metadata for one encoding.
+struct AcScanner {
+    automaton: AhoCorasick,
+    /// Map from AC pattern index → index into COMMAND_PATTERNS.
+    pattern_map: Vec<usize>,
+}
+
+/// Build the ASCII Aho-Corasick scanner (case-insensitive).
+fn build_ascii_scanner() -> AcScanner {
+    let patterns = command_patterns::COMMAND_PATTERNS;
+    let needles: Vec<&[u8]> = patterns.iter().map(|p| p.needle.as_bytes()).collect();
+    let pattern_map: Vec<usize> = (0..patterns.len()).collect();
+
+    let automaton = AhoCorasickBuilder::new()
+        .ascii_case_insensitive(true)
+        .match_kind(MatchKind::Standard)
+        .build(&needles)
+        .expect("failed to build ASCII Aho-Corasick");
+
+    AcScanner { automaton, pattern_map }
+}
+
+/// Build the UTF-16LE Aho-Corasick scanner (exact match on lowercased UTF-16LE needles).
+fn build_utf16le_scanner() -> AcScanner {
+    let patterns = command_patterns::COMMAND_PATTERNS;
+    let mut needles: Vec<Vec<u8>> = Vec::with_capacity(patterns.len());
+    let mut pattern_map: Vec<usize> = Vec::with_capacity(patterns.len());
+
+    for (i, pat) in patterns.iter().enumerate() {
+        let lower = pat.needle.to_ascii_lowercase();
+        let utf16 = to_utf16le_bytes(&lower);
+        needles.push(utf16);
+        pattern_map.push(i);
+    }
+
+    let automaton = AhoCorasickBuilder::new()
+        .match_kind(MatchKind::Standard)
+        .build(&needles)
+        .expect("failed to build UTF-16LE Aho-Corasick");
+
+    AcScanner { automaton, pattern_map }
+}
+
+static ASCII_SCANNER: OnceLock<AcScanner> = OnceLock::new();
+static UTF16LE_SCANNER: OnceLock<AcScanner> = OnceLock::new();
+
+fn get_ascii_scanner() -> &'static AcScanner {
+    ASCII_SCANNER.get_or_init(build_ascii_scanner)
+}
+
+fn get_utf16le_scanner() -> &'static AcScanner {
+    UTF16LE_SCANNER.get_or_init(build_utf16le_scanner)
+}
+
 pub fn run(image: &MemoryImage, chunk_size: usize, max_hits: usize) -> Result<CmdscanResult, String> {
-    let mut hits = Vec::new();
+    let mut hits = Vec::with_capacity(max_hits.min(512));
     let overlap = 4096;
     let image_size = image.size();
+    let patterns = command_patterns::COMMAND_PATTERNS;
+
+    let ascii_ac = get_ascii_scanner();
+    let utf16le_ac = get_utf16le_scanner();
 
     let mut offset: u64 = 0;
     while offset < image_size && hits.len() < max_hits {
@@ -51,30 +114,12 @@ pub fn run(image: &MemoryImage, chunk_size: usize, max_hits: usize) -> Result<Cm
             }
         };
 
-        // Scan ASCII and UTF-16LE in the same raw chunk.
-        for pat in command_patterns::COMMAND_PATTERNS {
-            if hits.len() >= max_hits {
-                break;
-            }
-            scan_for_pattern(
-                &chunk,
-                offset,
-                pat,
-                &mut hits,
-                max_hits,
-                HitEncoding::Ascii,
-            );
-            if hits.len() >= max_hits {
-                break;
-            }
-            scan_for_pattern(
-                &chunk,
-                offset,
-                pat,
-                &mut hits,
-                max_hits,
-                HitEncoding::Utf16le,
-            );
+        // Single-pass ASCII scan
+        scan_with_ac(&chunk, offset, ascii_ac, patterns, HitEncoding::Ascii, &mut hits, max_hits);
+
+        // Single-pass UTF-16LE scan
+        if hits.len() < max_hits {
+            scan_with_ac(&chunk, offset, utf16le_ac, patterns, HitEncoding::Utf16le, &mut hits, max_hits);
         }
 
         offset += chunk_size as u64;
@@ -89,70 +134,40 @@ pub fn run(image: &MemoryImage, chunk_size: usize, max_hits: usize) -> Result<Cm
     })
 }
 
-fn scan_for_pattern(
+fn scan_with_ac(
     chunk: &[u8],
     chunk_base: u64,
-    pat: &CommandPattern,
+    scanner: &AcScanner,
+    patterns: &[CommandPattern],
+    encoding: HitEncoding,
     hits: &mut Vec<CommandHit>,
     max_hits: usize,
-    encoding: HitEncoding,
 ) {
-    let needle_lower = pat.needle.to_ascii_lowercase();
-    let needle_bytes = match encoding {
-        HitEncoding::Ascii => needle_lower.as_bytes().to_vec(),
-        HitEncoding::Utf16le => to_utf16le_bytes(&needle_lower),
-    };
-    if needle_bytes.is_empty() || chunk.len() < needle_bytes.len() {
-        return;
-    }
-
-    // Case-insensitive match implemented by lowercasing the haystack on-the-fly for ASCII-ish ranges
-    // isn't feasible for raw memory; we approximate by only matching lowercase needles and doing a
-    // lowercasing compare per candidate window.
-    //
-    // We use memchr on the first byte to find candidates quickly.
-    let first = needle_bytes[0];
-    let first_alt = match encoding {
-        HitEncoding::Ascii => first.to_ascii_uppercase(),
-        HitEncoding::Utf16le => first,
-    };
-    let mut pos = 0;
-    while pos + needle_bytes.len() <= chunk.len() && hits.len() < max_hits {
-        let rel = match encoding {
-            HitEncoding::Ascii => memchr::memchr2(first, first_alt, &chunk[pos..]),
-            HitEncoding::Utf16le => memchr::memchr(first, &chunk[pos..]),
-        };
-        let rel = match rel {
-            Some(r) => r,
-            None => break,
-        };
-        let abs = pos + rel;
-        if abs + needle_bytes.len() > chunk.len() {
+    for mat in scanner.automaton.find_iter(chunk) {
+        if hits.len() >= max_hits {
             break;
         }
 
-        if window_eq_case_insensitive(&chunk[abs..abs + needle_bytes.len()], &needle_bytes, encoding)
-        {
-            // For short needles, require a word boundary before the match to avoid
-            // false positives like "content-encoding" matching "-enc".
-            if pat.needle.len() < 6 && !has_word_boundary_before(chunk, abs, encoding) {
-                pos = abs + 1;
-                continue;
-            }
+        let pat_idx = scanner.pattern_map[mat.pattern().as_usize()];
+        let pat = &patterns[pat_idx];
+        let abs = mat.start();
 
-            let hit_off = chunk_base + abs as u64;
-            hits.push(CommandHit {
-                offset: hit_off,
-                encoding: encoding.clone(),
-                category: pat.category.to_string(),
-                severity: severity_to_str(pat.severity).to_string(),
-                needle: pat.needle.to_string(),
-                description: pat.description.to_string(),
-                context: extract_context(chunk, abs, encoding),
-            });
+        // For short needles, require a word boundary before the match to avoid
+        // false positives like "content-encoding" matching "-enc".
+        if pat.needle.len() < 6 && !has_word_boundary_before(chunk, abs, encoding) {
+            continue;
         }
 
-        pos = abs + 1;
+        let hit_off = chunk_base + abs as u64;
+        hits.push(CommandHit {
+            offset: hit_off,
+            encoding,
+            category: pat.category.to_string(),
+            severity: severity_to_str(pat.severity).to_string(),
+            needle: pat.needle.to_string(),
+            description: pat.description.to_string(),
+            context: extract_context(chunk, abs, encoding),
+        });
     }
 }
 
@@ -176,22 +191,6 @@ fn has_word_boundary_before(chunk: &[u8], match_pos: usize, encoding: HitEncodin
     let b = chunk[check_pos];
     // Word boundary: whitespace, null, pipe, semicolon, quotes, parens, start-of-line chars
     matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0 | b'|' | b';' | b'"' | b'\'' | b'(' | b')')
-}
-
-fn window_eq_case_insensitive(window: &[u8], needle_lower: &[u8], encoding: HitEncoding) -> bool {
-    match encoding {
-        HitEncoding::Ascii => window
-            .iter()
-            .zip(needle_lower.iter())
-            .all(|(&w, &n)| w.to_ascii_lowercase() == n),
-        HitEncoding::Utf16le => {
-            // UTF-16LE lowercasing isn't attempted; we just compare bytes exactly
-            // against a lowercased ASCII needle expanded to UTF-16LE. This still
-            // hits in the common case where the buffer is lowercase or mixed and
-            // ASCII range unaffected (e.g., flags/keywords).
-            window == needle_lower
-        }
-    }
 }
 
 fn to_utf16le_bytes(s: &str) -> Vec<u8> {
@@ -284,57 +283,54 @@ mod tests {
             needle: "powershell",
             description: "d",
         };
-        let mut hits = Vec::new();
-        scan_for_pattern(chunk, 0, &pat, &mut hits, 10, HitEncoding::Ascii);
-        assert!(!hits.is_empty());
+        // Test via the AC scanner path
+        let needles: Vec<&[u8]> = vec![pat.needle.as_bytes()];
+        let ac = AhoCorasickBuilder::new()
+            .ascii_case_insensitive(true)
+            .match_kind(MatchKind::Standard)
+            .build(&needles)
+            .unwrap();
+        let matches: Vec<_> = ac.find_iter(chunk.as_ref()).collect();
+        assert!(!matches.is_empty(), "AC should find case-insensitive match");
+        assert_eq!(matches[0].start(), 2);
     }
 
     #[test]
     fn test_word_boundary_rejects_encoding_header() {
         // "content-encoding" should NOT match "-enc" because 't' precedes it
         let chunk = b"content-encoding: gzip";
-        let pat = CommandPattern {
-            category: "powershell_encoded",
-            severity: CommandSeverity::High,
-            needle: "-enc",
-            description: "PowerShell encoded command flag",
-        };
-        let mut hits = Vec::new();
-        scan_for_pattern(chunk, 0, &pat, &mut hits, 10, HitEncoding::Ascii);
-        assert!(hits.is_empty(), "should not match -enc inside content-encoding");
+        let abs = 7; // position of "-enc" in "content-encoding"
+        assert!(
+            !has_word_boundary_before(chunk, abs, HitEncoding::Ascii),
+            "should not have word boundary before -enc inside content-encoding"
+        );
     }
 
     #[test]
     fn test_word_boundary_allows_powershell_enc() {
         // "powershell -enc ABC" SHOULD match because ' ' precedes "-enc"
         let chunk = b"powershell -enc ABC123==";
-        let pat = CommandPattern {
-            category: "powershell_encoded",
-            severity: CommandSeverity::High,
-            needle: "-enc",
-            description: "PowerShell encoded command flag",
-        };
-        let mut hits = Vec::new();
-        scan_for_pattern(chunk, 0, &pat, &mut hits, 10, HitEncoding::Ascii);
-        assert!(!hits.is_empty(), "should match -enc after a space");
+        let abs = 11; // position of "-enc"
+        assert!(
+            has_word_boundary_before(chunk, abs, HitEncoding::Ascii),
+            "should have word boundary before -enc after a space"
+        );
     }
 
     #[test]
     fn test_utf16le_match() {
         let mut chunk = Vec::new();
-        // "mimikatz" in UTF-16LE
+        // "xxmimikatz yy" in UTF-16LE
         for b in b"xxmimikatz yy" {
             chunk.push(*b);
             chunk.push(0);
         }
-        let pat = CommandPattern {
-            category: "t",
-            severity: CommandSeverity::Critical,
-            needle: "mimikatz",
-            description: "d",
-        };
-        let mut hits = Vec::new();
-        scan_for_pattern(&chunk, 0, &pat, &mut hits, 10, HitEncoding::Utf16le);
-        assert!(!hits.is_empty());
+        let needle = to_utf16le_bytes("mimikatz");
+        let ac = AhoCorasickBuilder::new()
+            .match_kind(MatchKind::Standard)
+            .build(&[&needle])
+            .unwrap();
+        let matches: Vec<_> = ac.find_iter(&chunk).collect();
+        assert!(!matches.is_empty(), "AC should find UTF-16LE match");
     }
 }

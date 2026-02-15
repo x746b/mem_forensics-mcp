@@ -8,7 +8,7 @@
 //! 5. Computes an overall risk score
 //! 6. Generates recommended response actions
 
-use crate::analyzers::{network_analyzer, process_anomalies};
+use crate::analyzers::{command_analyzer, network_analyzer, process_anomalies};
 use crate::memory::image::MemoryImage;
 use crate::memory::virtual_memory::VirtualMemory;
 use crate::plugins::{cmdline, cmdscan, malfind, netscan, pslist, psscan};
@@ -88,6 +88,14 @@ pub struct TriageReport {
     /// Command history results.
     pub suspicious_command_count: usize,
 
+    /// Structured command findings from process cmdlines (high confidence).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub command_findings: Vec<command_analyzer::CommandFinding>,
+
+    /// Raw memory scan hits with context (medium confidence).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub command_scan_hits: Vec<cmdscan::CommandHit>,
+
     /// Injected code detection results.
     pub injected_code_count: usize,
     pub injected_pe_count: usize,
@@ -113,10 +121,17 @@ struct TriageContext {
     #[allow(dead_code)]
     cmdlines: Vec<cmdline::CmdlineInfo>,
     netscan_result: Option<netscan::NetscanResult>,
-    cmdscan_hits: usize,
+    cmdscan_result: Option<cmdscan::CmdscanResult>,
+    command_findings: Vec<command_analyzer::CommandFinding>,
     malfind_regions: Vec<InjectedRegion>,
     anomaly_report: process_anomalies::AnomalyReport,
     c2_report: Option<network_analyzer::C2Report>,
+}
+
+impl TriageContext {
+    fn cmdscan_hits(&self) -> usize {
+        self.cmdscan_result.as_ref().map(|r| r.total_hits).unwrap_or(0)
+    }
 }
 
 // ── Main entry point ─────────────────────────────────────────────────
@@ -225,14 +240,25 @@ pub fn run_with_head(
         );
     }
 
+    // Command analyzer (structured cmdline pattern matching)
+    let command_findings = if !cmdlines.is_empty() {
+        command_analyzer::analyze(&cmdlines)
+    } else {
+        Vec::new()
+    };
+    info!("full_triage: command analyzer found {} suspicious cmdlines", command_findings.len());
+
     // ── Step 3: Build context and correlate ──────────────────────────
+
+    let cmdscan_hits_count = cmdscan_result.as_ref().map(|r| r.total_hits).unwrap_or(0);
 
     let ctx = TriageContext {
         pslist_procs,
         psscan_procs,
         cmdlines,
         netscan_result,
-        cmdscan_hits,
+        cmdscan_result,
+        command_findings,
         malfind_regions,
         anomaly_report,
         c2_report,
@@ -277,7 +303,9 @@ pub fn run_with_head(
             .map(|r| r.flagged_connections)
             .unwrap_or(0),
         network_report: ctx.c2_report,
-        suspicious_command_count: ctx.cmdscan_hits,
+        suspicious_command_count: cmdscan_hits_count,
+        command_findings: ctx.command_findings,
+        command_scan_hits: ctx.cmdscan_result.map(|r| r.hits).unwrap_or_default(),
         injected_code_count: ctx.malfind_regions.len(),
         injected_pe_count: ctx.malfind_regions.iter().filter(|r| r.has_pe_header).count(),
         injected_regions: ctx.malfind_regions,
@@ -317,7 +345,7 @@ fn build_correlations(ctx: &TriageContext) -> Vec<Correlation> {
         .anomalies
         .iter()
         .any(|a| a.category == "name_masquerading");
-    let has_suspicious_cmds = ctx.cmdscan_hits > 0;
+    let has_suspicious_cmds = ctx.cmdscan_hits() > 0 || !ctx.command_findings.is_empty();
     let has_injected_pe = ctx.malfind_regions.iter().any(|r| r.has_pe_header);
     let has_injected_code = !ctx.malfind_regions.is_empty();
 
@@ -455,7 +483,7 @@ fn build_correlations(ctx: &TriageContext) -> Vec<Correlation> {
                 .to_string(),
             evidence: vec![
                 "LOLBin with suspicious arguments".to_string(),
-                format!("{} suspicious command fragments in memory", ctx.cmdscan_hits),
+                format!("{} suspicious command fragments in memory", ctx.cmdscan_hits()),
             ],
         });
     }
@@ -470,7 +498,7 @@ fn build_correlations(ctx: &TriageContext) -> Vec<Correlation> {
                 .to_string(),
             evidence: vec![
                 "C2 connections detected".to_string(),
-                format!("{} suspicious command fragments found", ctx.cmdscan_hits),
+                format!("{} suspicious command fragments found", ctx.cmdscan_hits()),
             ],
         });
     }
@@ -628,10 +656,17 @@ fn compute_risk_score(ctx: &TriageContext, correlations: &[Correlation]) -> u32 
         score += c2.medium_count as u32 * 5;
     }
 
-    // Command history
-    if ctx.cmdscan_hits > 0 {
-        score += (ctx.cmdscan_hits as u32).min(20) * 2;
+    // Structured command findings (high confidence, higher weight)
+    for cf in &ctx.command_findings {
+        match cf.severity {
+            Severity::Critical => score += 15,
+            Severity::High => score += 8,
+            Severity::Medium => score += 3,
+            _ => {}
+        }
     }
+    // Raw memory scan (lower confidence, reduced weight)
+    score += ctx.cmdscan_hits().min(10) as u32;
 
     // Injected code
     let pe_injections = ctx.malfind_regions.iter().filter(|r| r.has_pe_header).count() as u32;
@@ -703,11 +738,19 @@ fn build_summary(
         }
     }
 
-    if ctx.cmdscan_hits > 0 {
-        parts.push(format!(
-            "Commands: {} suspicious fragments",
-            ctx.cmdscan_hits
-        ));
+    {
+        let structured = ctx.command_findings.len();
+        let raw = ctx.cmdscan_hits();
+        if structured > 0 || raw > 0 {
+            let mut cmd_parts = Vec::new();
+            if structured > 0 {
+                cmd_parts.push(format!("{} suspicious processes", structured));
+            }
+            if raw > 0 {
+                cmd_parts.push(format!("{} memory fragments", raw));
+            }
+            parts.push(format!("Commands: {}", cmd_parts.join(", ")));
+        }
     }
 
     if !ctx.malfind_regions.is_empty() {
@@ -842,14 +885,15 @@ fn build_actions(
     }
 
     // Medium actions
-    if ctx.cmdscan_hits > 5 {
+    if ctx.cmdscan_hits() > 5 || !ctx.command_findings.is_empty() {
         actions.push(Action {
             priority: Severity::Medium,
             action: "Review suspicious command history in detail".to_string(),
             reason: format!(
-                "{} suspicious command fragments found. \
+                "{} suspicious command-line processes and {} raw memory fragments found. \
                  Manual review needed to determine attacker activity.",
-                ctx.cmdscan_hits
+                ctx.command_findings.len(),
+                ctx.cmdscan_hits()
             ),
         });
     }
@@ -965,7 +1009,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
 
             anomaly_report: make_anomaly_report(vec![
@@ -985,7 +1030,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(vec![
                 make_anomaly("lsass_child", Severity::Critical, 999, "procdump.exe"),
@@ -1004,7 +1050,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(vec![
                 make_anomaly("lolbin_abuse", Severity::High, 1000, "powershell.exe"),
@@ -1023,7 +1070,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(Vec::new()),
             c2_report: Some(C2Report {
@@ -1049,7 +1097,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(Vec::new()),
             c2_report: None,
@@ -1063,7 +1112,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 10,
+            cmdscan_result: Some(cmdscan::CmdscanResult { total_hits: 10, hits: Vec::new() }),
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(vec![
                 make_anomaly("hidden_process", Severity::Critical, 666, "evil.exe"),
@@ -1085,7 +1135,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(vec![
                 make_anomaly("hidden_process", Severity::Critical, 666, "evil.exe"),
@@ -1107,7 +1158,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(vec![
                 make_anomaly("hidden_process", Severity::Critical, 666, "evil.exe"),
@@ -1140,7 +1192,8 @@ mod tests {
             psscan_procs: Vec::new(),
             cmdlines: Vec::new(),
             netscan_result: None,
-            cmdscan_hits: 0,
+            cmdscan_result: None,
+            command_findings: Vec::new(),
             malfind_regions: Vec::new(),
             anomaly_report: make_anomaly_report(Vec::new()),
             c2_report: None,

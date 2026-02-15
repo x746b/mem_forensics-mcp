@@ -34,7 +34,7 @@ class MemoxideClient:
         self,
         binary_path: str | Path | None = None,
         symbols_root: str | Path | None = None,
-        call_timeout: float = 30.0,
+        call_timeout: float = 60.0,
     ):
         from ..config import MEMOXIDE_BINARY, MEMOXIDE_SYMBOLS
 
@@ -42,6 +42,7 @@ class MemoxideClient:
         self._symbols_root = Path(symbols_root) if symbols_root else MEMOXIDE_SYMBOLS
         self._call_timeout = call_timeout
         self._process: Optional[asyncio.subprocess.Process] = None
+        self._stderr_file = None
         self._request_id = 0
         self._initialized = False
         self._lock = asyncio.Lock()
@@ -80,12 +81,14 @@ class MemoxideClient:
             if self._symbols_root.exists():
                 env["MEMOXIDE_SYMBOLS_ROOT"] = str(self._symbols_root)
 
+            self._stderr_file = open("/tmp/memoxide-debug.log", "a")
             self._process = await asyncio.create_subprocess_exec(
                 str(self._binary_path),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=self._stderr_file,
                 env=env,
+                limit=16 * 1024 * 1024,  # 16MB readline buffer (triage JSON can be large)
             )
 
             # Start reader task for responses
@@ -135,6 +138,13 @@ class MemoxideClient:
             except ProcessLookupError:
                 pass
             self._process = None
+
+        if self._stderr_file:
+            try:
+                self._stderr_file.close()
+            except Exception:
+                pass
+            self._stderr_file = None
 
         self._initialized = False
         # Cancel all pending futures

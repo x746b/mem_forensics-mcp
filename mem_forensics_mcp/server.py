@@ -758,7 +758,16 @@ async def _run_full_triage(image_path: str, quick_scan: bool = False) -> dict[st
     # Step 2: Try Rust full_triage if available (it has its own orchestrator)
     if session.rust_initialized:
         memoxide = _get_memoxide()
+        import time as _time
+        _t0 = _time.monotonic()
         rust_triage = await memoxide.full_triage(session.rust_session_id)
+        _elapsed = _time.monotonic() - _t0
+        if rust_triage is None:
+            logger.warning(f"Rust full_triage returned None after {_elapsed:.1f}s (timeout?)")
+        elif "error" in rust_triage:
+            logger.warning(f"Rust full_triage error after {_elapsed:.1f}s: {rust_triage.get('error')}")
+        else:
+            logger.info(f"Rust full_triage completed in {_elapsed:.1f}s")
         if rust_triage and "error" not in rust_triage:
             # Enrich with Vol3-only data (credentials)
             if not quick_scan:
