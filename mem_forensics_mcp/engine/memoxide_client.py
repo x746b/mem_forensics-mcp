@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+from .. import __version__
+
 logger = logging.getLogger(__name__)
 
 
@@ -93,7 +95,7 @@ class MemoxideClient:
             init_result = await self._send_request("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "mem_forensics_mcp", "version": "0.1.0"},
+                "clientInfo": {"name": "mem_forensics_mcp", "version": __version__},
             })
 
             if init_result is not None:

@@ -20,6 +20,7 @@ from mcp.types import (
     Tool,
 )
 
+from . import __version__
 from .config import MAX_RESPONSE_SIZE
 from .engine import MemoxideClient
 from .core import (
@@ -497,7 +498,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     "path": VOL3_PATH,
                 },
                 "virustotal_available": VT_AVAILABLE,
-                "server_version": "0.1.0",
+                "server_version": __version__,
                 "architecture": "Three-tier: Rust (fast) → Python analyzers → Vol3 (fallback)",
             })
 
