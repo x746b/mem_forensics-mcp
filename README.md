@@ -36,7 +36,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 python3 --version
 ```
 
-### Install
+### Install from PyPI
+
+```bash
+uv pip install mem-forensics-mcp
+```
+
+### Install from source
 
 ```bash
 git clone https://github.com/x746b/mem_forensics-mcp.git
