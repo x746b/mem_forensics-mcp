@@ -681,7 +681,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if not VT_AVAILABLE:
                 return json_response({"error": "vt-py library not installed"})
             try:
-                return json_response(vt_lookup_hash(arguments["file_hash"]))
+                result = await asyncio.to_thread(vt_lookup_hash, arguments["file_hash"])
+                return json_response(result)
             except (ValueError, RuntimeError) as e:
                 return json_response({"error": str(e)})
 
@@ -689,7 +690,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if not VT_AVAILABLE:
                 return json_response({"error": "vt-py library not installed"})
             try:
-                return json_response(vt_lookup_ip(arguments["ip_address"]))
+                result = await asyncio.to_thread(vt_lookup_ip, arguments["ip_address"])
+                return json_response(result)
             except (ValueError, RuntimeError) as e:
                 return json_response({"error": str(e)})
 
@@ -697,7 +699,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if not VT_AVAILABLE:
                 return json_response({"error": "vt-py library not installed"})
             try:
-                return json_response(vt_lookup_domain(arguments["domain"]))
+                result = await asyncio.to_thread(vt_lookup_domain, arguments["domain"])
+                return json_response(result)
             except (ValueError, RuntimeError) as e:
                 return json_response({"error": str(e)})
 
@@ -705,7 +708,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if not VT_AVAILABLE:
                 return json_response({"error": "vt-py library not installed"})
             try:
-                return json_response(vt_lookup_file(arguments["file_path"]))
+                result = await asyncio.to_thread(vt_lookup_file, arguments["file_path"])
+                return json_response(result)
             except (ValueError, RuntimeError, FileNotFoundError) as e:
                 return json_response({"error": str(e)})
 
