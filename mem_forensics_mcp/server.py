@@ -621,8 +621,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return json_response(result)
 
         elif name == "memory_find_c2_connections":
-            result = await asyncio.to_thread(
-                find_c2_connections,
+            result = await _run_find_c2_connections(
                 image_path=arguments["image_path"],
                 include_legitimate=arguments.get("include_legitimate", False),
                 include_listening=arguments.get("include_listening", False),
@@ -782,6 +781,94 @@ async def _run_full_triage(image_path: str, quick_scan: bool = False) -> dict[st
         return result
 
     return {"error": "No analysis engine available. Install volatility3 or provide memoxide binary."}
+
+
+async def _run_find_c2_connections(
+    image_path: str,
+    include_legitimate: bool = False,
+    include_listening: bool = False,
+) -> dict[str, Any]:
+    """
+    Find suspicious network connections using Rust netscan first.
+
+    The legacy Python analyzer gets connection data from Vol3
+    windows.netscan.NetScan, which is missing in some Volatility3 builds. Rust
+    netscan is the preferred data source; fall back to the legacy analyzer when
+    Rust is unavailable.
+    """
+    session = get_session(image_path)
+    if session is None:
+        return {"error": "Failed to create session"}
+
+    if not session.rust_initialized:
+        await _try_rust_analyze(image_path)
+
+    if session.rust_initialized:
+        memoxide = _get_memoxide()
+        rust_result = await memoxide.find_c2_connections(session.rust_session_id)
+
+        if rust_result and "error" not in rust_result and "_rust_error" not in rust_result:
+            flagged = rust_result.get("flagged", [])
+            if not include_listening:
+                flagged = [
+                    item for item in flagged
+                    if "LISTEN" not in str(
+                        item.get("connection", {}).get("state", "")
+                    ).upper()
+                ]
+
+            critical_count = sum(
+                1 for item in flagged
+                if str(item.get("severity", "")).lower() == "critical"
+            )
+            high_count = sum(
+                1 for item in flagged
+                if str(item.get("severity", "")).lower() == "high"
+            )
+            medium_count = sum(
+                1 for item in flagged
+                if str(item.get("severity", "")).lower() == "medium"
+            )
+            low_count = sum(
+                1 for item in flagged
+                if str(item.get("severity", "")).lower() == "low"
+            )
+
+            result = {
+                "image_path": image_path,
+                "profile": session.profile,
+                "engine": "rust",
+                "total_connections": rust_result.get("total_connections", 0),
+                "suspicious_connections": len(flagged),
+                "critical_count": critical_count,
+                "high_count": high_count,
+                "medium_count": medium_count,
+                "low_count": low_count,
+                "connections": flagged,
+                "summary": f"Found {len(flagged)} suspicious connections",
+            }
+
+            if include_legitimate:
+                netscan_result = await memoxide.run_plugin(session.rust_session_id, "netscan")
+                if netscan_result and "connections" in netscan_result:
+                    all_connections = netscan_result["connections"]
+                    if not include_listening:
+                        all_connections = [
+                            item for item in all_connections
+                            if "LISTEN" not in str(item.get("state", "")).upper()
+                        ]
+                    result["all_connections"] = all_connections
+
+            return result
+
+        logger.warning("Rust C2 analysis failed, falling back to Vol3 analyzer: %s", rust_result)
+
+    return await asyncio.to_thread(
+        find_c2_connections,
+        image_path=image_path,
+        include_legitimate=include_legitimate,
+        include_listening=include_listening,
+    )
 
 
 async def main():

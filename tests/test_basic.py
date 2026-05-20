@@ -4,15 +4,17 @@ Basic tests for mem-forensics-mcp.
 Tests module imports, configuration, and basic functionality
 without requiring actual memory dumps or Vol3.
 """
-import pytest
+from importlib.metadata import version
 from pathlib import Path
+
+import pytest
 
 
 def test_package_import():
     """Test that the main package imports successfully."""
     import mem_forensics_mcp
     assert hasattr(mem_forensics_mcp, "__version__")
-    assert mem_forensics_mcp.__version__ == "0.1.0"
+    assert mem_forensics_mcp.__version__ == version("mem-forensics-mcp")
 
 
 def test_config_import():
