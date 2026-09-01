@@ -156,8 +156,12 @@ def get_command_history(
     if not init_result.get("ready"):
         return {"error": init_result.get("error", "Failed to initialize")}
 
-    if session.os_type != "windows":
-        return {"error": f"Command history only supported for Windows (got: {session.os_type})"}
+    guard = session.structured_analysis_error(
+        "Command history",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     commands: list[CommandEntry] = []
 

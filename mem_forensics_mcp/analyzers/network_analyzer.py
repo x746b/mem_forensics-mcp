@@ -168,10 +168,12 @@ def find_c2_connections(
             "detail": init_result.get("error", "Unknown error"),
         }
 
-    if session.os_type != "windows":
-        return {
-            "error": f"Network analysis only supported for Windows (got: {session.os_type})",
-        }
+    guard = session.structured_analysis_error(
+        "Network analysis",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     logger.info("Running netscan...")
     try:

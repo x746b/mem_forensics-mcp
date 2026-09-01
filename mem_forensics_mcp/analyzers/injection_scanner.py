@@ -153,10 +153,12 @@ def find_injected_code(
             "detail": init_result.get("error", "Unknown error"),
         }
 
-    if session.os_type != "windows":
-        return {
-            "error": f"Injection scanning only supported for Windows (got: {session.os_type})",
-        }
+    guard = session.structured_analysis_error(
+        "Injection scanning",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     logger.info("Running malfind...")
     try:

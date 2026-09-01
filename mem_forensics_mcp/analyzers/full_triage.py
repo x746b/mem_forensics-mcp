@@ -76,6 +76,13 @@ def full_triage(
     if not init_result.get("ready"):
         return {"error": init_result.get("error", "Failed to initialize")}
 
+    guard = session.structured_analysis_error(
+        "Full triage",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
+
     findings: list[Finding] = []
     iocs: dict[str, list[str]] = {
         "sha256": [],

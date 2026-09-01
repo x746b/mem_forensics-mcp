@@ -75,8 +75,12 @@ def extract_credentials(
     if not init_result.get("ready"):
         return {"error": init_result.get("error", "Failed to initialize")}
 
-    if session.os_type != "windows":
-        return {"error": f"Credential extraction only supported for Windows (got: {session.os_type})"}
+    guard = session.structured_analysis_error(
+        "Credential extraction",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     credentials: list[CredentialFinding] = []
     errors: list[str] = []

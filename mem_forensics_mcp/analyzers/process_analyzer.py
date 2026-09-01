@@ -167,10 +167,12 @@ def hunt_process_anomalies(
             "detail": init_result.get("error", "Unknown error"),
         }
 
-    if session.os_type != "windows":
-        return {
-            "error": f"Process anomaly detection only supported for Windows (got: {session.os_type})",
-        }
+    guard = session.structured_analysis_error(
+        "Process anomaly detection",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     logger.info("Running pslist...")
     pslist_procs = session.run_plugin("windows.pslist.PsList")
@@ -393,6 +395,13 @@ def get_process_tree(
     init_result = session.initialize()
     if not init_result.get("ready"):
         return {"error": init_result.get("error", "Failed to initialize")}
+
+    guard = session.structured_analysis_error(
+        "Process tree",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     # Get processes
     processes = session.run_plugin("windows.pslist.PsList")

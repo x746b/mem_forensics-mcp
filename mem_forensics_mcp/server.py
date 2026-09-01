@@ -29,6 +29,7 @@ from .core import (
     get_session,
     list_sessions,
     clear_sessions,
+    normalize_os_type,
     run_plugin as vol3_run_plugin,
     list_available_plugins,
 )
@@ -73,6 +74,8 @@ RUST_PLUGINS = {
 
 # Plugins that ONLY exist in Rust (no Vol3 fallback)
 RUST_ONLY_PLUGINS = {"search", "readraw", "rsds"}
+RUST_RAW_PLUGINS = {"search", "readraw", "rsds"}
+RUST_WINDOWS_STRUCTURED_PLUGINS = RUST_PLUGINS - RUST_RAW_PLUGINS
 
 
 def _get_memoxide() -> MemoxideClient:
@@ -152,9 +155,9 @@ async def _try_rust_analyze(image_path: str, **kwargs) -> dict[str, Any] | None:
             profile = result.get("profile", result.get("detection", {}))
             # Normalize profile to dict (Rust returns ISF path string)
             if isinstance(profile, str):
-                os_name = "windows" if "windows" in profile.lower() else "unknown"
+                os_name = normalize_os_type(profile)
                 profile = {"os": os_name, "isf_path": profile}
-            session.set_rust_session(result["session_id"], profile)
+            session.set_rust_session(result["session_id"], profile, metadata=result)
         return result
     return None
 
@@ -205,7 +208,11 @@ async def list_tools() -> list[Tool]:
     # Session Management
     tools.append(Tool(
         name="memory_analyze_image",
-        description="Initialize memory image analysis. Tries Rust engine first (fast ISF auto-detection), falls back to Vol3. Returns session ID for subsequent operations.",
+        description=(
+            "Initialize memory image analysis. Tries Rust first, then Volatility. "
+            "Returns separate session_ready, raw_ready, and structured_ready fields; "
+            "ready is retained as a session-readiness compatibility alias."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -254,7 +261,10 @@ async def list_tools() -> list[Tool]:
 
     tools.append(Tool(
         name="memory_get_process_tree",
-        description="Get process tree showing parent-child relationships. Highlights suspicious processes.",
+        description=(
+            "Get a Windows process tree showing parent-child relationships. "
+            "Refuses unknown/Linux routing and reports missing structured symbols explicitly."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -299,7 +309,10 @@ async def list_tools() -> list[Tool]:
     # Forensic Artifacts
     tools.append(Tool(
         name="memory_get_command_history",
-        description="Recover attacker commands from cmd.exe history and process command lines. Uses Rust cmdscan, enriched by Vol3.",
+        description=(
+            "Recover Windows attacker commands from cmd.exe history and process command lines. "
+            "Reports missing structured symbols without attempting Windows plugins on other OSes."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -350,7 +363,10 @@ async def list_tools() -> list[Tool]:
 
     tools.append(Tool(
         name="memory_list_plugins",
-        description="List all available plugins (Rust + Vol3).",
+        description=(
+            "List raw and structure-aware plugin capabilities separately, with OS and "
+            "readiness state for the selected image."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -470,12 +486,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     "image_path": image_path,
                     "engine": "rust (memoxide)",
                     "rust_session_id": rust_result["session_id"],
-                    "profile": rust_result.get("profile", rust_result.get("detection", {})),
-                    "ready": True,
+                    "profile": session.profile if session else rust_result.get("profile"),
                 }
+                if session:
+                    result.update(session.readiness())
                 # Add file size if available
-                if "file_size_bytes" in rust_result:
-                    result["file_size_bytes"] = rust_result["file_size_bytes"]
+                file_size = rust_result.get("file_size_bytes", rust_result.get("image_size"))
+                if file_size is not None:
+                    result["file_size_bytes"] = file_size
                     result["file_size_gb"] = rust_result.get("file_size_gb")
                 return json_response(result)
 
@@ -524,11 +542,20 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
             # Tier 1: Try Rust for supported plugins
             plugin_lower = plugin.lower()
-            if plugin_lower in RUST_PLUGINS:
-                # Ensure Rust session exists
-                if not session.rust_initialized:
-                    await _try_rust_analyze(image_path)
+            use_rust = plugin_lower in RUST_RAW_PLUGINS or (
+                plugin_lower in RUST_WINDOWS_STRUCTURED_PLUGINS
+                and session.os_type == "windows"
+                and session.structured_ready
+            )
+            if plugin_lower in RUST_PLUGINS and not session.rust_initialized:
+                await _try_rust_analyze(image_path)
+                use_rust = plugin_lower in RUST_RAW_PLUGINS or (
+                    plugin_lower in RUST_WINDOWS_STRUCTURED_PLUGINS
+                    and session.os_type == "windows"
+                    and session.structured_ready
+                )
 
+            if use_rust:
                 rust_params = dict(params) if params else {}
                 if pid is not None:
                     rust_params["pid"] = pid
@@ -554,6 +581,20 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         "hint": "Ensure image is initialized with memory_analyze_image first",
                     })
 
+            if plugin_lower in RUST_ONLY_PLUGINS:
+                return json_response({
+                    "error": f"Raw plugin '{plugin}' requires an initialized Rust session",
+                    **session.readiness(),
+                })
+
+            vol3_ready = await asyncio.to_thread(session.ensure_vol3_initialized)
+            if not vol3_ready:
+                error = session.structured_analysis_error(f"Plugin '{plugin}'")
+                return json_response(error or {
+                    "error": f"Plugin '{plugin}' requires Volatility structured parsing",
+                    **session.readiness(),
+                })
+
             # Tier 3: Vol3 fallback (run in thread to avoid blocking event loop
             # and starving the Rust engine's async reader)
             vol3_kwargs = {}
@@ -576,14 +617,35 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return json_response(result)
 
         elif name == "memory_list_plugins":
-            rust_plugins = sorted(RUST_PLUGINS)
-            vol3_result = await asyncio.to_thread(list_available_plugins, image_path=arguments["image_path"])
+            image_path = arguments["image_path"]
+            session = get_session(image_path)
+            if session is None:
+                return json_response({"error": "Failed to create session"})
+            if not session.rust_initialized:
+                await _try_rust_analyze(image_path)
 
-            return json_response({
-                "rust_plugins": rust_plugins,
+            vol3_result = {"plugins": {}}
+            if await asyncio.to_thread(session.ensure_vol3_initialized):
+                vol3_result = await asyncio.to_thread(
+                    list_available_plugins,
+                    image_path=image_path,
+                )
+
+            result = {
+                "rust_plugins": sorted(RUST_PLUGINS),
+                "raw_plugins": sorted(RUST_RAW_PLUGINS) if session.raw_ready else [],
+                "structured_plugins": {
+                    "rust": (
+                        sorted(RUST_WINDOWS_STRUCTURED_PLUGINS)
+                        if session.structured_ready and session.os_type == "windows"
+                        else []
+                    ),
+                    "vol3": vol3_result.get("plugins", {}),
+                },
                 "vol3_plugins": vol3_result.get("plugins", {}),
-                "os_type": vol3_result.get("os_type"),
-            })
+            }
+            result.update(session.readiness())
+            return json_response(result)
 
         # === Analysis Tools (Tier 2, using Tier 1 data) ===
 
@@ -748,6 +810,13 @@ async def _run_full_triage(image_path: str, quick_scan: bool = False) -> dict[st
     if not session.rust_initialized:
         await _try_rust_analyze(image_path)
 
+    guard = session.structured_analysis_error(
+        "Full triage",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
+
     # Step 2: Try Rust full_triage if available (it has its own orchestrator)
     if session.rust_initialized:
         memoxide = _get_memoxide()
@@ -802,6 +871,13 @@ async def _run_find_c2_connections(
 
     if not session.rust_initialized:
         await _try_rust_analyze(image_path)
+
+    guard = session.structured_analysis_error(
+        "C2 connection analysis",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     if session.rust_initialized:
         memoxide = _get_memoxide()

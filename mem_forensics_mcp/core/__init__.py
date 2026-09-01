@@ -1,7 +1,14 @@
 """
 Core components for memory forensics analysis.
 """
-from .session import MemorySession, get_session, clear_sessions, list_sessions
+from .session import (
+    MemorySession,
+    clear_sessions,
+    detect_image_os,
+    get_session,
+    list_sessions,
+    normalize_os_type,
+)
 from .vol3_runner import (
     Vol3Runner,
     VOL3_AVAILABLE,
@@ -15,6 +22,8 @@ __all__ = [
     "get_session",
     "clear_sessions",
     "list_sessions",
+    "detect_image_os",
+    "normalize_os_type",
     "Vol3Runner",
     "VOL3_AVAILABLE",
     "VOL3_PATH",

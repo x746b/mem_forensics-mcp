@@ -113,6 +113,16 @@ memory_full_triage(image_path="/evidence/memory.raw")
 memory_run_plugin(image_path="/evidence/memory.raw", plugin="malfind", pid=1234)
 ```
 
+`memory_analyze_image` reports readiness at two levels:
+
+- `ready` and `session_ready`: an engine opened the image and the session can be reused.
+- `raw_ready`: OS-agnostic Rust operations such as `search` and `readraw` are available.
+- `structured_ready`: symbols/profile data is sufficient for structure-aware plugins.
+
+`ready` remains a compatibility alias for `session_ready`; it does not imply that
+Volatility process, network, or command plugins can run. Check `os_type`,
+`structured_ready`, `capabilities`, and `warnings` before choosing those tools.
+
 ---
 
 ## Tool Reference
@@ -199,4 +209,3 @@ memory_run_plugin(image_path="memory.raw", plugin="filescan", filter="notepad")
 
 MIT License | __xtk__ | Built for the DFIR community. No Windows required >)
 <!-- mcp-name: io.github.x746b/mem-forensics-mcp -->
-

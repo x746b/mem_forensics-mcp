@@ -55,8 +55,12 @@ def dump_process(
             "detail": init_result.get("error", "Unknown error"),
         }
 
-    if session.os_type != "windows":
-        return {"error": f"Process dumping only supported for Windows (got: {session.os_type})"}
+    guard = session.structured_analysis_error(
+        "Process dumping",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     if output_dir:
         dump_path = Path(output_dir)
@@ -159,6 +163,13 @@ def dump_dll(
     if not init_result.get("ready"):
         return {"error": "Failed to initialize session"}
 
+    guard = session.structured_analysis_error(
+        "DLL inspection",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
+
     if not dll_name and not dll_base:
         return {"error": "Must specify either dll_name or dll_base"}
 
@@ -237,6 +248,13 @@ def dump_vad(
     init_result = session.initialize()
     if not init_result.get("ready"):
         return {"error": "Failed to initialize session"}
+
+    guard = session.structured_analysis_error(
+        "VAD inspection",
+        supported_os={"windows"},
+    )
+    if guard:
+        return guard
 
     if output_dir:
         dump_path = Path(output_dir)
