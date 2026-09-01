@@ -1,6 +1,6 @@
 [project]
 name = "mem-forensics-mcp"
-version = "1.2.2"
+version = "1.3.0"
 description = "Unified Memory Forensics MCP Server - Multi-tier engine (Rust + Python + Vol3)"
 readme = "README.md"
 license = { text = "MIT" }
