@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,6 +90,9 @@ class MemorySession:
         self._initialized = False
         self._profile: Any = {}
         self._detected_os = detect_image_os(self.image_path)
+        self._symbols_root: Optional[Path] = None
+        self._isf_path: Optional[Path] = None
+        self._vol3_diagnostics: dict[str, Any] = {}
         self._created_at = time.time()
 
         self._rust_session_id: Optional[str] = None
@@ -136,7 +140,7 @@ class MemorySession:
         return bool(
             self._runner
             and self._runner.is_initialized
-            and normalize_os_type(self._runner.os_type)
+            and self._runner.structured_ready
         )
 
     @property
@@ -161,9 +165,16 @@ class MemorySession:
         warnings: list[str] = []
         if self.session_ready and not self.structured_ready:
             if self.os_type == "linux":
+                kernel_banner = self._vol3_diagnostics.get("kernel_banner")
+                expected_isf = self._vol3_diagnostics.get("expected_isf")
+                detail = "Linux image detected"
+                if kernel_banner:
+                    detail += f" ({kernel_banner})"
+                detail += "; a matching Linux ISF is required for structure-aware plugins"
+                if expected_isf:
+                    detail += f" (suggested filename: {expected_isf})"
                 warnings.append(
-                    "Linux image detected; a matching Linux ISF is required for "
-                    "structure-aware plugins"
+                    detail
                 )
             elif self.os_type == "windows":
                 warnings.append(
@@ -174,7 +185,7 @@ class MemorySession:
                     "OS type could not be determined; structure-aware plugins are disabled"
                 )
 
-        return {
+        result = {
             # Backward compatibility: ready means the session can be used, not
             # that structured parsing is available.
             "ready": self.session_ready,
@@ -185,6 +196,56 @@ class MemorySession:
             "capabilities": capabilities,
             "warnings": warnings,
         }
+        if self._vol3_diagnostics.get("kernel_banner"):
+            result["kernel_banner"] = self._vol3_diagnostics["kernel_banner"]
+        if self._vol3_diagnostics.get("expected_isf"):
+            result["expected_isf"] = self._vol3_diagnostics["expected_isf"]
+        return result
+
+    @property
+    def symbol_dirs(self) -> list[str]:
+        paths: list[str] = []
+        if self._symbols_root:
+            paths.append(str(self._symbols_root))
+        if self._isf_path:
+            paths.append(str(self._isf_path.parent))
+        return list(dict.fromkeys(paths))
+
+    def configure_symbols(
+        self,
+        symbols_root: str | Path | None = None,
+        isf_path: str | Path | None = None,
+    ) -> None:
+        """Configure caller-supplied Volatility symbol locations."""
+        new_root = Path(symbols_root).absolute() if symbols_root else self._symbols_root
+        new_isf = Path(isf_path).absolute() if isf_path else self._isf_path
+
+        if new_root and not new_root.is_dir():
+            raise ValueError(f"Symbols root is not a directory: {new_root}")
+        if new_isf and not new_isf.is_file():
+            raise ValueError(f"ISF file not found: {new_isf}")
+
+        changed = new_root != self._symbols_root or new_isf != self._isf_path
+        self._symbols_root = new_root
+        self._isf_path = new_isf
+        if changed and self._runner and not self._runner.structured_ready:
+            self._runner = None
+            self._vol3_diagnostics = {}
+
+    def set_linux_diagnostics(self, kernel_banner: str) -> None:
+        """Store symbol guidance derived from an OS-agnostic banner scan."""
+        self._detected_os = "linux"
+        version_match = re.match(r"Linux version\s+([^\s]+)", kernel_banner)
+        kernel_release = (
+            version_match.group(1) if version_match else "unknown-linux-kernel"
+        )
+        self._vol3_diagnostics.update({
+            "os": "Linux",
+            "kernel": kernel_release,
+            "kernel_banner": kernel_banner,
+            "expected_isf": f"{kernel_release}.json.xz",
+            "symbols_loaded": False,
+        })
 
     def structured_analysis_error(
         self,
@@ -284,8 +345,14 @@ class MemorySession:
             return result
 
         try:
-            self._runner = Vol3Runner(self.image_path)
+            self._runner = Vol3Runner(
+                self.image_path,
+                symbols_root=self._symbols_root,
+                isf_path=self._isf_path,
+                os_hint=self.os_type,
+            )
             self._profile = self._runner.initialize()
+            self._vol3_diagnostics = dict(self._profile)
             self._initialized = True
 
             file_size = self.image_path.stat().st_size
@@ -340,13 +407,19 @@ class MemorySession:
         # Create Vol3 runner directly (bypass initialize() which may
         # return early if session was already initialized by Rust)
         try:
-            self._runner = Vol3Runner(self.image_path)
+            self._runner = Vol3Runner(
+                self.image_path,
+                symbols_root=self._symbols_root,
+                isf_path=self._isf_path,
+                os_hint=self.os_type,
+            )
             vol3_profile = self._runner.initialize()
             self._initialized = True
+            self._vol3_diagnostics = dict(vol3_profile)
             # Merge Vol3 profile info if we only had Rust profile
-            if isinstance(self._profile, dict) and isinstance(vol3_profile, dict):
+            if self._runner.structured_ready and isinstance(self._profile, dict) and isinstance(vol3_profile, dict):
                 self._profile.update(vol3_profile)
-            elif isinstance(vol3_profile, dict):
+            elif self._runner.structured_ready and isinstance(vol3_profile, dict):
                 self._profile = vol3_profile
             return self.vol3_ready
         except Exception as e:
@@ -470,16 +543,23 @@ class MemorySession:
         }
 
 
-def get_session(image_path: str | Path, create: bool = True) -> Optional[MemorySession]:
+def get_session(
+    image_path: str | Path,
+    create: bool = True,
+    symbols_root: str | Path | None = None,
+    isf_path: str | Path | None = None,
+) -> Optional[MemorySession]:
     """Get or create a session for a memory image."""
     image_path = str(Path(image_path).absolute())
 
     for session in _sessions.values():
         if str(session.image_path) == image_path:
+            session.configure_symbols(symbols_root=symbols_root, isf_path=isf_path)
             return session
 
     if create:
         session = MemorySession(image_path)
+        session.configure_symbols(symbols_root=symbols_root, isf_path=isf_path)
         _sessions[session.session_id] = session
         return session
 

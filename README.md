@@ -123,6 +123,23 @@ memory_run_plugin(image_path="/evidence/memory.raw", plugin="malfind", pid=1234)
 Volatility process, network, or command plugins can run. Check `os_type`,
 `structured_ready`, `capabilities`, and `warnings` before choosing those tools.
 
+For Linux structure-aware analysis, provide either a symbol directory or an
+explicit ISF file. Linux ISFs are never downloaded or generated automatically:
+
+```python
+memory_analyze_image(
+    image_path="/evidence/memory.lime",
+    symbols_root="/evidence/symbols",
+    # or: isf_path="/evidence/symbols/5.10.0-35-amd64.json.xz",
+)
+```
+
+Without a matching ISF, LiME images still expose raw `search` and `readraw`.
+The analysis response includes the exact kernel banner and a suggested ISF
+filename. With symbols loaded, process tree routes to `linux.pslist.PsList`,
+command history routes to `linux.bash.Bash`, and generic Linux Volatility
+plugins are available through `memory_run_plugin`.
+
 ---
 
 ## Tool Reference

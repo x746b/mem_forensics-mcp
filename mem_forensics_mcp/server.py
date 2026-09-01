@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 from mcp.server import Server
@@ -179,6 +180,44 @@ async def _try_rust_plugin(session, plugin: str, params: dict | None = None) -> 
     return result
 
 
+async def _detect_linux_banner_with_rust(session) -> bool:
+    """Populate Linux banner diagnostics through fast OS-agnostic raw search."""
+    result = await _try_rust_plugin(
+        session,
+        "search",
+        {
+            "pattern": "Linux version ",
+            "encoding": "ascii",
+            "limit": 32,
+            "context": 512,
+        },
+    )
+    if not result or "error" in result or "_rust_error" in result:
+        return False
+
+    marker = b"Linux version "
+    for match in result.get("matches", []):
+        context_hex = match.get("context_hex")
+        if not context_hex:
+            continue
+        try:
+            context = bytes.fromhex(context_hex)
+        except ValueError:
+            continue
+        offset = context.find(marker)
+        if offset < 0:
+            continue
+        banner_bytes = context[offset:].split(b"\x00", 1)[0]
+        try:
+            banner = banner_bytes.decode("latin-1").strip()
+        except UnicodeDecodeError:
+            continue
+        if re.match(r"Linux version\s+\d+\.\d+\.\d+", banner):
+            session.set_linux_diagnostics(banner)
+            return True
+    return False
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
@@ -228,6 +267,14 @@ async def list_tools() -> list[Tool]:
                     "type": "string",
                     "description": "Override kernel base address (hex or decimal)",
                 },
+                "symbols_root": {
+                    "type": "string",
+                    "description": "Directory containing Volatility symbol files (including Linux ISFs)",
+                },
+                "isf_path": {
+                    "type": "string",
+                    "description": "Explicit Volatility ISF JSON/JSON.XZ/JSON.GZ file",
+                },
             },
             "required": ["image_path"],
         },
@@ -262,8 +309,8 @@ async def list_tools() -> list[Tool]:
     tools.append(Tool(
         name="memory_get_process_tree",
         description=(
-            "Get a Windows process tree showing parent-child relationships. "
-            "Refuses unknown/Linux routing and reports missing structured symbols explicitly."
+            "Get a Windows or Linux process tree showing parent-child relationships. "
+            "Reports missing structured symbols explicitly."
         ),
         inputSchema={
             "type": "object",
@@ -310,8 +357,8 @@ async def list_tools() -> list[Tool]:
     tools.append(Tool(
         name="memory_get_command_history",
         description=(
-            "Recover Windows attacker commands from cmd.exe history and process command lines. "
-            "Reports missing structured symbols without attempting Windows plugins on other OSes."
+            "Recover Windows cmd.exe/process command lines or Linux Bash history. "
+            "Reports missing structured symbols without cross-OS plugin routing."
         ),
         inputSchema={
             "type": "object",
@@ -345,6 +392,9 @@ async def list_tools() -> list[Tool]:
             "Tier 1 (Rust, fast): pslist, psscan, cmdline, dlllist, malfind, netscan, cmdscan, search, readraw, rsds — use short names. "
             "Tier 3 (Vol3): any other plugin — short names auto-resolve (e.g. 'filescan', 'handles', 'envars'). "
             "If a short name fails, use full Vol3 path: 'windows.category.PluginName' (e.g. 'windows.mftscan.MFTScan'). "
+            "Linux aliases include linux.pslist, linux.pstree, linux.bash, "
+            "linux.pagecache.Files, linux.pagecache.InodePages, "
+            "linux.malware.hidden_modules, linux.lsmod, and linux.sockstat. "
             "Use 'filter' param to grep results server-side (avoids truncation). "
             "For search: use params={\"pattern\": \"text\", \"encoding\": \"ascii|utf16le|hex\", \"limit\": N, \"context\": N}."
         ),
@@ -472,15 +522,37 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             image_path = arguments["image_path"]
             dtb = arguments.get("dtb")
             kernel_base = arguments.get("kernel_base")
+            symbols_root = arguments.get("symbols_root")
+            isf_path = arguments.get("isf_path")
+
+            try:
+                session = get_session(
+                    image_path,
+                    symbols_root=symbols_root,
+                    isf_path=isf_path,
+                )
+            except ValueError as e:
+                return json_response({"error": str(e), "image_path": image_path})
 
             # Tier 1: Try Rust engine first
+            rust_isf = isf_path if session and session.os_type != "linux" else None
             rust_result = await _try_rust_analyze(
-                image_path, dtb=dtb, kernel_base=kernel_base,
+                image_path,
+                isf_path=rust_isf,
+                dtb=dtb,
+                kernel_base=kernel_base,
             )
 
             if rust_result and rust_result.get("session_id"):
                 # Rust succeeded - return combined info
                 session = get_session(image_path)
+                if session and session.os_type == "linux":
+                    if symbols_root or isf_path:
+                        await asyncio.to_thread(session.ensure_vol3_initialized)
+                    elif not await _detect_linux_banner_with_rust(session):
+                        await asyncio.to_thread(session.ensure_vol3_initialized)
+                elif session and (symbols_root or isf_path):
+                    await asyncio.to_thread(session.ensure_vol3_initialized)
                 result = {
                     "session_id": session.session_id if session else rust_result["session_id"],
                     "image_path": image_path,
@@ -498,7 +570,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return json_response(result)
 
             # Tier 2: Fall back to Vol3
-            result = await asyncio.to_thread(analyze_image_profile, image_path=image_path)
+            result = await asyncio.to_thread(
+                analyze_image_profile,
+                image_path=image_path,
+                symbols_root=symbols_root,
+                isf_path=isf_path,
+            )
             if result.get("ready"):
                 result["engine"] = "vol3"
             return json_response(result)

@@ -13,6 +13,18 @@ from .vol3_runner import VOL3_AVAILABLE, run_vol3_cli
 
 logger = logging.getLogger(__name__)
 
+_LINUX_PLUGIN_ALIASES = {
+    "linux.pslist": "linux.pslist.PsList",
+    "linux.pstree": "linux.pstree.PsTree",
+    "linux.bash": "linux.bash.Bash",
+    "linux.pagecache.files": "linux.pagecache.Files",
+    "linux.pagecache.inodepages": "linux.pagecache.InodePages",
+    "linux.malware.hidden_modules": "linux.malware.hidden_modules.Hidden_modules",
+    "linux.hidden_modules": "linux.malware.hidden_modules.Hidden_modules",
+    "linux.lsmod": "linux.lsmod.Lsmod",
+    "linux.sockstat": "linux.sockstat.Sockstat",
+}
+
 
 def list_available_plugins(image_path: str) -> dict[str, Any]:
     """
@@ -214,6 +226,7 @@ def _run_via_cli(
             image_path=image_path,
             plugin_name=plugin_name,
             output_dir=dump_dir,
+            symbol_dirs=session.symbol_dirs if session else None,
             **cli_kwargs,
         )
 
@@ -249,9 +262,13 @@ def _normalize_plugin_name(plugin: str, os_type: Optional[str]) -> str:
     - "pslist" -> "windows.pslist.PsList" (adds OS prefix and class name)
     - "malfind" -> "windows.malfind.Malfind"
     """
+    alias = _LINUX_PLUGIN_ALIASES.get(plugin.lower())
+    if alias:
+        return alias
+
     parts = plugin.split(".")
 
-    if len(parts) == 3:
+    if len(parts) >= 3 and parts[-1][:1].isupper():
         return plugin
 
     if len(parts) == 2:

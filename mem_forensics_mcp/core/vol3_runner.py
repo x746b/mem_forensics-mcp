@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Generator, Optional
@@ -85,7 +86,13 @@ class Vol3Runner:
             print(process)
     """
 
-    def __init__(self, image_path: str | Path):
+    def __init__(
+        self,
+        image_path: str | Path,
+        symbols_root: str | Path | None = None,
+        isf_path: str | Path | None = None,
+        os_hint: Optional[str] = None,
+    ):
         """
         Initialize the runner with a memory image path.
 
@@ -103,7 +110,11 @@ class Vol3Runner:
         self._base_config_path = "plugins"
         self._initialized = False
         self._os_type: Optional[str] = None  # "windows", "linux", "mac"
+        self._structured_ready = False
         self._profile_info: dict[str, Any] = {}
+        self._symbols_root = Path(symbols_root).absolute() if symbols_root else None
+        self._isf_path = Path(isf_path).absolute() if isf_path else None
+        self._os_hint = os_hint
 
     @property
     def is_initialized(self) -> bool:
@@ -114,6 +125,20 @@ class Vol3Runner:
     def os_type(self) -> Optional[str]:
         """Get detected OS type."""
         return self._os_type
+
+    @property
+    def structured_ready(self) -> bool:
+        """Whether automagic resolved a symbol-backed kernel module."""
+        return self._structured_ready
+
+    @property
+    def symbol_dirs(self) -> list[str]:
+        paths: list[str] = []
+        if self._symbols_root:
+            paths.append(str(self._symbols_root))
+        if self._isf_path:
+            paths.append(str(self._isf_path.parent))
+        return list(dict.fromkeys(paths))
 
     @property
     def profile_info(self) -> dict[str, Any]:
@@ -132,6 +157,8 @@ class Vol3Runner:
 
         logger.info(f"Initializing Volatility3 for: {self.image_path}")
 
+        self._configure_symbol_paths()
+
         self._context = contexts.Context()
 
         self._context.config[
@@ -146,6 +173,17 @@ class Vol3Runner:
 
         return self._profile_info
 
+    def _configure_symbol_paths(self) -> None:
+        """Prepend caller-provided symbol locations to Volatility discovery."""
+        if not self.symbol_dirs:
+            return
+        import volatility3.symbols
+
+        existing = list(volatility3.symbols.__path__)
+        volatility3.symbols.__path__ = self.symbol_dirs + [
+            path for path in existing if path not in self.symbol_dirs
+        ]
+
     def _progress_callback(self, progress: float, description: str) -> None:
         # Could be used for status updates in the future
         pass
@@ -157,10 +195,18 @@ class Vol3Runner:
         Returns:
             Dict with profile information
         """
+        if self._os_hint == "linux":
+            linux_info = self._try_linux_info()
+            if linux_info:
+                self._os_type = "linux"
+                self._structured_ready = bool(linux_info.get("symbols_loaded"))
+                return linux_info
+
         try:
             windows_info = self._try_windows_info()
             if windows_info:
                 self._os_type = "windows"
+                self._structured_ready = True
                 return windows_info
         except Exception as e:
             logger.debug(f"Windows detection failed: {e}")
@@ -169,6 +215,7 @@ class Vol3Runner:
             linux_info = self._try_linux_info()
             if linux_info:
                 self._os_type = "linux"
+                self._structured_ready = bool(linux_info.get("symbols_loaded"))
                 return linux_info
         except Exception as e:
             logger.debug(f"Linux detection failed: {e}")
@@ -233,28 +280,46 @@ class Vol3Runner:
         return None
 
     def _try_linux_info(self) -> Optional[dict[str, Any]]:
-        """Try to get Linux info."""
+        """Detect a Linux banner and determine whether a matching ISF loaded."""
         try:
-            from volatility3.plugins.linux import banner
+            from volatility3.plugins import banners
+            from volatility3.plugins.linux import pslist
 
-            plugin = self._construct_plugin(banner.Banner)
+            plugin = self._construct_plugin(banners.Banners)
             if plugin is None:
                 return None
 
-            result = {}
             treegrid = plugin.run()
+            discovered: list[dict[str, Any]] = []
 
-            for row in treegrid:
-                if hasattr(row, '__iter__'):
-                    # Extract banner info
-                    pass
+            def visitor(node, accumulator):
+                if node.values and len(node.values) >= 2:
+                    banner = str(node.values[1])
+                    if banner.startswith("Linux version"):
+                        discovered.append({
+                            "offset": str(node.values[0]),
+                            "banner": banner,
+                        })
+                return None
 
-            if result:
-                return {
-                    "os": "Linux",
-                    "kernel": result.get("banner", "unknown"),
-                    "raw_info": result,
-                }
+            treegrid.populate(visitor)
+            if not discovered:
+                return None
+
+            kernel_banner = discovered[0]["banner"]
+            version_match = re.match(r"Linux version\s+([^\s]+)", kernel_banner)
+            kernel_release = version_match.group(1) if version_match else "unknown-linux-kernel"
+            expected_isf = f"{kernel_release}.json.xz"
+
+            symbols_loaded = self._construct_plugin(pslist.PsList) is not None
+            return {
+                "os": "Linux",
+                "kernel": kernel_release,
+                "kernel_banner": kernel_banner,
+                "expected_isf": expected_isf,
+                "symbols_loaded": symbols_loaded,
+                "banner_matches": discovered,
+            }
         except ImportError:
             pass
         except Exception as e:
@@ -400,9 +465,9 @@ class Vol3Runner:
         try:
             parts = plugin_name.split(".")
 
-            if len(parts) == 3:
-                os_name, module_name, class_name = parts
-                module_path = f"volatility3.plugins.{os_name}.{module_name}"
+            if len(parts) >= 3:
+                class_name = parts[-1]
+                module_path = "volatility3.plugins." + ".".join(parts[:-1])
 
             elif len(parts) == 2:
                 module_name, class_name = parts
@@ -561,6 +626,7 @@ def run_vol3_cli(
     image_path: str,
     plugin_name: str,
     output_dir: Optional[str] = None,
+    symbol_dirs: Optional[list[str]] = None,
     **kwargs,
 ) -> list[dict[str, Any]]:
     """
@@ -588,6 +654,8 @@ def run_vol3_cli(
         raise FileNotFoundError(f"vol.py not found at {vol_py}")
 
     cmd = ["uv", "run", "--directory", vol3_root, "python", vol_py]
+    if symbol_dirs:
+        cmd.extend(["--symbol-dirs", ";".join(symbol_dirs)])
     cmd.extend(["-f", str(image_path)])
     cmd.extend(["-r", "csv"])  # CSV output for easy parsing
     if output_dir:

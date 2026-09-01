@@ -176,7 +176,14 @@ def test_analyze_image_reports_linux_raw_readiness(tmp_path):
         session.set_rust_session("rust-linux", None, metadata=rust_result)
         return rust_result
 
-    with patch.object(server_module, "_try_rust_analyze", side_effect=fake_rust_analyze):
+    with (
+        patch.object(server_module, "_try_rust_analyze", side_effect=fake_rust_analyze),
+        patch.object(
+            server_module,
+            "_detect_linux_banner_with_rust",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
         result = decode_response(asyncio.run(server_module.call_tool(
             "memory_analyze_image",
             {"image_path": str(image)},

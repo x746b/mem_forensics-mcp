@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 def analyze_image_profile(
     image_path: str | Path,
+    symbols_root: str | Path | None = None,
+    isf_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """
     Analyze a memory image and detect its OS profile.
@@ -101,7 +103,18 @@ def analyze_image_profile(
             "hint": "Memory analysis requires the volatility3 library",
         }
 
-    session = get_session(image_path)
+    try:
+        session = get_session(
+            image_path,
+            symbols_root=symbols_root,
+            isf_path=isf_path,
+        )
+    except ValueError as e:
+        return {
+            "image_path": str(image_path.absolute()),
+            "ready": False,
+            "error": str(e),
+        }
     if session is None:
         return {
             "image_path": str(image_path.absolute()),

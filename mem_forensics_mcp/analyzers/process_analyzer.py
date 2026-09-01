@@ -398,13 +398,16 @@ def get_process_tree(
 
     guard = session.structured_analysis_error(
         "Process tree",
-        supported_os={"windows"},
+        supported_os={"linux", "windows"},
     )
     if guard:
         return guard
 
-    # Get processes
-    processes = session.run_plugin("windows.pslist.PsList")
+    os_type = session.os_type
+    plugin_name = (
+        "linux.pslist.PsList" if os_type == "linux" else "windows.pslist.PsList"
+    )
+    processes = session.run_plugin(plugin_name)
 
     pid_to_proc: dict[int, dict] = {}
     children: dict[int, list[int]] = {}
@@ -412,12 +415,21 @@ def get_process_tree(
     for proc in processes:
         pid = proc.get("PID")
         ppid = proc.get("PPID")
+        create_time = (
+            proc.get("CREATION TIME")
+            if os_type == "linux"
+            else proc.get("CreateTime")
+        )
         if pid is not None:
             pid_to_proc[pid] = {
                 "pid": pid,
-                "name": proc.get("ImageFileName", "unknown"),
+                "name": (
+                    proc.get("COMM", "unknown")
+                    if os_type == "linux"
+                    else proc.get("ImageFileName", "unknown")
+                ),
                 "ppid": ppid,
-                "create_time": str(proc.get("CreateTime")) if proc.get("CreateTime") else None,
+                "create_time": str(create_time) if create_time else None,
             }
 
             if ppid is not None:
@@ -433,13 +445,14 @@ def get_process_tree(
 
         node = {
             "pid": proc["pid"],
+            "ppid": proc["ppid"],
             "name": proc["name"],
             "create_time": proc["create_time"],
             "depth": depth,
             "children": [],
         }
 
-        if highlight_suspicious:
+        if highlight_suspicious and os_type == "windows":
             name = proc["name"]
             parent_name = pid_to_proc.get(proc.get("ppid"), {}).get("name")
 
@@ -495,6 +508,8 @@ def get_process_tree(
     return {
         "image_path": str(session.image_path),
         "profile": session.profile,
+        "os_type": os_type,
+        "plugin": plugin_name,
         "total_processes": len(pid_to_proc),
         "trees": trees,
     }

@@ -158,10 +158,13 @@ def get_command_history(
 
     guard = session.structured_analysis_error(
         "Command history",
-        supported_os={"windows"},
+        supported_os={"linux", "windows"},
     )
     if guard:
         return guard
+
+    if session.os_type == "linux":
+        return _get_linux_bash_history(session, pid=pid, include_benign=include_benign)
 
     commands: list[CommandEntry] = []
 
@@ -281,6 +284,62 @@ def get_command_history(
         "commands": [c.to_dict() for c in unique_commands],
         "finding_summary": finding_counts,
         "summary": summary,
+    }
+
+
+def _get_linux_bash_history(
+    session,
+    pid: Optional[int] = None,
+    include_benign: bool = False,
+) -> dict[str, Any]:
+    """Recover Bash history through Volatility's Linux Bash plugin."""
+    plugin_args = {"pid": [pid]} if pid is not None else {}
+    try:
+        bash_results = session.run_plugin("linux.bash.Bash", **plugin_args)
+    except Exception as e:
+        return {
+            "error": f"Linux Bash history plugin failed: {e}",
+            **session.readiness(),
+        }
+
+    commands: list[CommandEntry] = []
+    for result in bash_results:
+        command_pid = result.get("PID")
+        if pid is not None and command_pid != pid:
+            continue
+        command = result.get("Command")
+        if not command:
+            continue
+
+        entry = CommandEntry(
+            pid=command_pid or 0,
+            process_name=str(result.get("Process", "bash")),
+            command=str(command),
+            source="bash",
+            timestamp=(
+                str(result.get("CommandTime"))
+                if result.get("CommandTime")
+                else None
+            ),
+        )
+        _analyze_command(entry)
+        if entry.findings or include_benign:
+            commands.append(entry)
+
+    finding_counts: dict[str, int] = {}
+    for entry in commands:
+        for finding in entry.findings:
+            finding_counts[finding.type] = finding_counts.get(finding.type, 0) + 1
+
+    return {
+        "image_path": str(session.image_path),
+        "profile": session.profile,
+        "os_type": "linux",
+        "plugin": "linux.bash.Bash",
+        "commands_found": len(commands),
+        "commands": [entry.to_dict() for entry in commands],
+        "finding_summary": finding_counts,
+        "summary": f"Recovered {len(commands)} Bash history commands",
     }
 
 

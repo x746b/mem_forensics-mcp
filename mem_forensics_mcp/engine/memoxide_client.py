@@ -282,6 +282,7 @@ class MemoxideClient:
         self,
         image_path: str,
         symbols_root: Optional[str] = None,
+        isf_path: Optional[str] = None,
         dtb: Optional[str] = None,
         kernel_base: Optional[str] = None,
     ) -> Optional[dict]:
@@ -292,10 +293,8 @@ class MemoxideClient:
             Session info dict, or None if Rust engine failed.
         """
         params: dict[str, Any] = {"image_path": image_path}
-        if symbols_root:
-            params["symbols_root"] = symbols_root
-        elif self._symbols_root.exists():
-            params["symbols_root"] = str(self._symbols_root)
+        if isf_path:
+            params["isf_path"] = isf_path
         if dtb:
             params["dtb"] = dtb
         if kernel_base:
