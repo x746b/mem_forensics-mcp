@@ -9,9 +9,11 @@ Multi-tier architecture:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
@@ -77,6 +79,8 @@ RUST_PLUGINS = {
 RUST_ONLY_PLUGINS = {"search", "readraw", "rsds"}
 RUST_RAW_PLUGINS = {"search", "readraw", "rsds"}
 RUST_WINDOWS_STRUCTURED_PLUGINS = RUST_PLUGINS - RUST_RAW_PLUGINS
+MEMORY_SEARCH_DIRECT_MATCHES = 5
+MEMORY_SEARCH_CONTEXT_CHARS = 160
 
 
 def _get_memoxide() -> MemoxideClient:
@@ -136,6 +140,66 @@ def _apply_filter(data: dict[str, Any], filter_str: str) -> dict[str, Any]:
 def json_response(data: dict[str, Any]) -> list[TextContent]:
     data = truncate_response(data)
     return [TextContent(type="text", text=json.dumps(data, indent=2, default=str))]
+
+
+def _project_memory_search(
+    result: dict[str, Any],
+    image_path: str,
+    params: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bound direct search output and persist the complete backend response."""
+    search_params = params or {}
+    raw_matches = result.get("matches")
+    matches = raw_matches if isinstance(raw_matches, list) else []
+    total_matches = result.get("total_matches", len(matches))
+    pattern = result.get("pattern", search_params.get("pattern", ""))
+
+    projected_matches = []
+    for match in matches[:MEMORY_SEARCH_DIRECT_MATCHES]:
+        if not isinstance(match, dict):
+            continue
+        context = str(match.get("context_ascii") or match.get("text") or "")
+        if len(context) > MEMORY_SEARCH_CONTEXT_CHARS:
+            try:
+                requested_context = max(0, int(search_params.get("context", 64)))
+                match_offset = max(0, int(match.get("offset", 0)))
+                match_index = min(requested_context, match_offset)
+            except (TypeError, ValueError):
+                match_index = len(context) // 2
+            start = max(0, match_index - MEMORY_SEARCH_CONTEXT_CHARS // 2)
+            start = min(start, len(context) - MEMORY_SEARCH_CONTEXT_CHARS)
+            context = context[start:start + MEMORY_SEARCH_CONTEXT_CHARS]
+        projected_matches.append({
+            "offset": match.get("offset"),
+            "context_ascii": context,
+        })
+
+    projected: dict[str, Any] = {
+        "pattern": pattern,
+        "total_matches": total_matches,
+        "matches": projected_matches,
+    }
+
+    if len(matches) > MEMORY_SEARCH_DIRECT_MATCHES or (
+        isinstance(total_matches, int) and total_matches > MEMORY_SEARCH_DIRECT_MATCHES
+    ):
+        try:
+            triage_dir = Path(image_path).resolve().parent / "triage" / "memory-search"
+            triage_dir.mkdir(parents=True, exist_ok=True)
+            key_material = json.dumps({
+                "pattern": pattern,
+                "encoding": search_params.get("encoding", "ascii"),
+            }, sort_keys=True).encode()
+            result_path = triage_dir / f"search-{hashlib.sha256(key_material).hexdigest()[:12]}.json"
+            result_path.write_text(
+                json.dumps(result, indent=2, default=str),
+                encoding="utf-8",
+            )
+            projected["persisted_results"] = str(result_path)
+        except OSError as exc:
+            logger.warning("Could not persist full memory-search result: %s", exc)
+
+    return projected
 
 
 async def _try_rust_analyze(image_path: str, **kwargs) -> dict[str, Any] | None:
@@ -396,7 +460,8 @@ async def list_tools() -> list[Tool]:
             "linux.pagecache.Files, linux.pagecache.InodePages, "
             "linux.malware.hidden_modules, linux.lsmod, and linux.sockstat. "
             "Use 'filter' param to grep results server-side (avoids truncation). "
-            "For search: use params={\"pattern\": \"text\", \"encoding\": \"ascii|utf16le|hex\", \"limit\": N, \"context\": N}."
+            "For search: use params={\"pattern\": \"text\", \"encoding\": \"ascii|utf16le|hex\", \"limit\": N, \"context\": N}; "
+            "direct output contains at most five bounded ASCII contexts and persists larger results under triage/."
         ),
         inputSchema={
             "type": "object",
@@ -650,6 +715,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         rust_result.setdefault("engine", "rust")
                         if result_filter:
                             rust_result = _apply_filter(rust_result, result_filter)
+                        if plugin_lower == "search":
+                            rust_result = _project_memory_search(
+                                rust_result,
+                                image_path,
+                                rust_params,
+                            )
                         return json_response(rust_result)
                 elif plugin_lower in RUST_ONLY_PLUGINS:
                     # Rust unavailable and plugin is Rust-only

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -203,7 +204,11 @@ def test_raw_search_remains_available_without_isf(tmp_path):
     session = get_session(image)
     session.set_rust_session("rust-linux", None, metadata={"virtual_memory": False})
 
-    rust_plugin = AsyncMock(return_value={"matches": [{"offset": 16, "text": "marker"}]})
+    rust_plugin = AsyncMock(return_value={
+        "pattern": "marker",
+        "total_matches": 1,
+        "matches": [{"offset": 16, "text": "marker"}],
+    })
     with patch.object(server_module, "_try_rust_plugin", rust_plugin):
         result = decode_response(asyncio.run(server_module.call_tool(
             "memory_run_plugin",
@@ -215,8 +220,54 @@ def test_raw_search_remains_available_without_isf(tmp_path):
         )))
 
     rust_plugin.assert_awaited_once()
-    assert result["engine"] == "rust"
-    assert result["matches"][0]["text"] == "marker"
+    assert result == {
+        "pattern": "marker",
+        "total_matches": 1,
+        "matches": [{"offset": 16, "context_ascii": "marker"}],
+    }
+
+
+def test_raw_search_projection_caps_context_and_persists_full_results(tmp_path):
+    image = make_image(tmp_path, name="memory.raw", header=b"MEM")
+    session = get_session(image)
+    session.set_rust_session("rust-search", None, metadata={"virtual_memory": False})
+    matches = [
+        {
+            "offset": index * 4096,
+            "context_ascii": "A" * 100 + f"hit-{index}" + "Z" * 100,
+            "context_hex": "41 42 43",
+        }
+        for index in range(8)
+    ]
+
+    with patch.object(
+        server_module,
+        "_try_rust_plugin",
+        new=AsyncMock(return_value={
+            "pattern": "needle",
+            "total_matches": 8,
+            "matches": matches,
+        }),
+    ):
+        result = decode_response(asyncio.run(server_module.call_tool(
+            "memory_run_plugin",
+            {
+                "image_path": str(image),
+                "plugin": "search",
+                "params": {"pattern": "needle", "context": 512},
+            },
+        )))
+
+    assert result["pattern"] == "needle"
+    assert result["total_matches"] == 8
+    assert len(result["matches"]) == 5
+    assert all("context_hex" not in match for match in result["matches"])
+    assert all(len(match["context_ascii"]) <= 160 for match in result["matches"])
+    persisted = Path(result["persisted_results"])
+    assert persisted.parent == tmp_path / "triage" / "memory-search"
+    saved = json.loads(persisted.read_text(encoding="utf-8"))
+    assert len(saved["matches"]) == 8
+    assert saved["matches"][0]["context_hex"] == "41 42 43"
 
 
 def test_linux_pslist_does_not_call_windows_rust_plugin_without_symbols(tmp_path):
